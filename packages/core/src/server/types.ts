@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { AgentStatus } from "../agent/types";
-import type { ToolStatusInfo as CoreToolStatusInfo, ToolStatus } from "../tool";
+import type { ToolStatusInfo as CoreToolStatusInfo } from "../tool";
 
 export type { AgentStatus };
 
@@ -29,6 +29,26 @@ export type AgentResponse = {
         isTelemetryEnabled?: boolean;
       }[];
   isTelemetryEnabled?: boolean;
+};
+
+export type WorkflowStatus = "idle" | "running" | "completed" | "error";
+
+export type WorkflowStepInfo = {
+  id: string;
+  name: string;
+  purpose: string | null;
+  type: string;
+  agentId?: string;
+  agentName?: string;
+};
+
+export type WorkflowResponse = {
+  id: string;
+  name: string;
+  purpose: string;
+  stepsCount: number;
+  status: WorkflowStatus;
+  steps: WorkflowStepInfo[];
 };
 
 export type ApiResponse<T> = {

@@ -57,6 +57,27 @@ const createTimelineEvent = (overrides: any = {}): any => ({
   ...overrides,
 });
 
+// Workflow test data helper
+const createWorkflowTimelineEvent = (overrides: any = {}): any => ({
+  id: "test-workflow-event-id",
+  name: "workflow:start",
+  type: "workflow",
+  startTime: new Date().toISOString(),
+  endTime: new Date().toISOString(),
+  status: "running",
+  level: "INFO",
+  input: { message: "test workflow event input" },
+  output: { result: "test workflow event output" },
+  metadata: { workflowId: "test-workflow-id", executionId: "test-workflow-execution-id" },
+  statusMessage: null,
+  version: null,
+  parentEventId: null,
+  tags: null,
+  error: null,
+  traceId: "test-trace-id",
+  ...overrides,
+});
+
 describe("PostgresStorage", () => {
   let storage: PostgresStorage;
 
@@ -198,13 +219,15 @@ describe("PostgresStorage", () => {
         createMessage({ id: "msg2", role: "assistant" }),
       ];
       mockQuery.mockResolvedValueOnce({
-        rows: mockMessages.map((msg) => ({
-          message_id: msg.id,
-          role: msg.role,
-          content: msg.content,
-          type: msg.type,
-          created_at: msg.createdAt,
-        })),
+        rows: mockMessages
+          .map((msg) => ({
+            message_id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            type: msg.type,
+            created_at: msg.createdAt,
+          }))
+          .reverse(),
       });
 
       const messages = await storage.getMessages({
@@ -272,6 +295,219 @@ describe("PostgresStorage", () => {
         expect.stringContaining("DELETE FROM"),
         expect.arrayContaining(["conversation1", 1]), // Should delete 1 message (101 - 100)
       );
+    });
+  });
+
+  describe("Message Type Filtering", () => {
+    it("should filter messages by single type - text only", async () => {
+      mockConnect.mockResolvedValueOnce({
+        query: mockQuery.mockResolvedValueOnce({
+          rows: [
+            {
+              message_id: "msg1",
+              role: "user",
+              content: "User question",
+              type: "text",
+              created_at: "2023-01-01T12:00:00.000Z",
+            },
+            {
+              message_id: "msg2",
+              role: "assistant",
+              content: "Response",
+              type: "text",
+              created_at: "2023-01-01T12:00:01.000Z",
+            },
+          ],
+        }),
+        release: vi.fn(),
+      });
+
+      const messages = await storage.getMessages({
+        conversationId: "test-conv",
+        types: ["text"],
+      });
+
+      expect(messages).toHaveLength(2);
+      expect(messages.every((m) => m.type === "text")).toBe(true);
+    });
+
+    it("should filter messages by single type - tool-call only", async () => {
+      mockConnect.mockResolvedValueOnce({
+        query: mockQuery.mockResolvedValueOnce({
+          rows: [
+            {
+              message_id: "msg1",
+              role: "assistant",
+              content: JSON.stringify({ tool: "calculator", args: { a: 1, b: 2 } }),
+              type: "tool-call",
+              created_at: "2023-01-01T12:00:00.000Z",
+            },
+          ],
+        }),
+        release: vi.fn(),
+      });
+
+      const messages = await storage.getMessages({
+        conversationId: "test-conv",
+        types: ["tool-call"],
+      });
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0].type).toBe("tool-call");
+    });
+
+    it("should filter messages by single type - tool-result only", async () => {
+      mockConnect.mockResolvedValueOnce({
+        query: mockQuery.mockResolvedValueOnce({
+          rows: [
+            {
+              message_id: "msg1",
+              role: "tool",
+              content: JSON.stringify({ result: 3 }),
+              type: "tool-result",
+              created_at: "2023-01-01T12:00:00.000Z",
+            },
+          ],
+        }),
+        release: vi.fn(),
+      });
+
+      const messages = await storage.getMessages({
+        conversationId: "test-conv",
+        types: ["tool-result"],
+      });
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0].type).toBe("tool-result");
+    });
+
+    it("should filter messages by multiple types", async () => {
+      mockConnect.mockResolvedValueOnce({
+        query: mockQuery.mockResolvedValueOnce({
+          rows: [
+            {
+              message_id: "msg1",
+              role: "user",
+              content: "Question",
+              type: "text",
+              created_at: "2023-01-01T12:00:00.000Z",
+            },
+            {
+              message_id: "msg2",
+              role: "assistant",
+              content: JSON.stringify({ tool: "calculator" }),
+              type: "tool-call",
+              created_at: "2023-01-01T12:00:01.000Z",
+            },
+            {
+              message_id: "msg3",
+              role: "assistant",
+              content: "Answer",
+              type: "text",
+              created_at: "2023-01-01T12:00:02.000Z",
+            },
+          ],
+        }),
+        release: vi.fn(),
+      });
+
+      const messages = await storage.getMessages({
+        conversationId: "test-conv",
+        types: ["text", "tool-call"],
+      });
+
+      expect(messages).toHaveLength(3);
+      expect(messages.filter((m) => m.type === "text")).toHaveLength(2);
+      expect(messages.filter((m) => m.type === "tool-call")).toHaveLength(1);
+    });
+
+    it("should return no messages when types array is empty", async () => {
+      mockConnect.mockResolvedValueOnce({
+        query: mockQuery.mockResolvedValueOnce({
+          rows: [],
+        }),
+        release: vi.fn(),
+      });
+
+      const messages = await storage.getMessages({
+        conversationId: "test-conv",
+        types: [],
+      });
+
+      expect(messages).toHaveLength(0);
+    });
+
+    it("should return all messages when types is undefined", async () => {
+      mockConnect.mockResolvedValueOnce({
+        query: mockQuery.mockResolvedValueOnce({
+          rows: [
+            {
+              message_id: "msg1",
+              role: "user",
+              content: "Question",
+              type: "text",
+              created_at: "2023-01-01T12:00:00.000Z",
+            },
+            {
+              message_id: "msg2",
+              role: "assistant",
+              content: JSON.stringify({ tool: "calculator" }),
+              type: "tool-call",
+              created_at: "2023-01-01T12:00:01.000Z",
+            },
+            {
+              message_id: "msg3",
+              role: "tool",
+              content: JSON.stringify({ result: 3 }),
+              type: "tool-result",
+              created_at: "2023-01-01T12:00:02.000Z",
+            },
+          ],
+        }),
+        release: vi.fn(),
+      });
+
+      const messages = await storage.getMessages({
+        conversationId: "test-conv",
+      });
+
+      expect(messages).toHaveLength(3);
+    });
+
+    it("should combine type filtering with limit", async () => {
+      mockConnect.mockResolvedValueOnce({
+        query: mockQuery.mockResolvedValueOnce({
+          rows: [
+            {
+              message_id: "msg3",
+              role: "assistant",
+              content: "Latest text",
+              type: "text",
+              created_at: "2023-01-01T12:00:02.000Z",
+            },
+            {
+              message_id: "msg2",
+              role: "user",
+              content: "Second text",
+              type: "text",
+              created_at: "2023-01-01T12:00:01.000Z",
+            },
+          ], // Query returns DESC order (latest first)
+        }),
+        release: vi.fn(),
+      });
+
+      const messages = await storage.getMessages({
+        conversationId: "test-conv",
+        types: ["text"],
+        limit: 2,
+      });
+
+      expect(messages).toHaveLength(2);
+      expect(messages.every((m) => m.type === "text")).toBe(true);
+      // Should be in chronological order after reversal
+      expect(messages[0].content).toBe("Second text");
+      expect(messages[1].content).toBe("Latest text");
     });
   });
 
@@ -890,16 +1126,18 @@ describe("PostgresStorage", () => {
         },
       ];
 
-      // Mock queries: history entries, steps for each entry, events for each entry
+      // Mock queries: count query, history entries, steps for each entry, events for each entry
       mockQuery
-        .mockResolvedValueOnce({ rows: mockHistoryRows })
+        .mockResolvedValueOnce({ rows: [{ total: "1" }] }) // count query
+        .mockResolvedValueOnce({ rows: mockHistoryRows }) // history entries
         .mockResolvedValueOnce({ rows: [] }) // steps
         .mockResolvedValueOnce({ rows: [] }); // events
 
-      const result = await storage.getAllHistoryEntriesByAgent("agent-1");
+      const result = await storage.getAllHistoryEntriesByAgent("agent-1", 0, 20);
 
-      expect(result).toHaveLength(1);
-      expect(result[0]).toEqual(
+      expect(result.total).toBe(1);
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0]).toEqual(
         expect.objectContaining({
           id: "history-1",
           _agentId: "agent-1",
@@ -1069,6 +1307,82 @@ describe("PostgresStorage", () => {
     it("should close the connection pool", async () => {
       await storage.close();
       expect(mockEnd).toHaveBeenCalled();
+    });
+  });
+
+  describe("Workflow Operations", () => {
+    it("should add a workflow timeline event", async () => {
+      const event = createWorkflowTimelineEvent();
+
+      await storage.addTimelineEvent(event.id, event, "execution-1", "workflow-1");
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining("INSERT INTO"),
+        expect.arrayContaining([
+          event.id,
+          "execution-1",
+          "workflow-1",
+          event.type,
+          event.name,
+          event.startTime,
+          event.endTime,
+          event.status,
+          null, // status_message
+          event.level,
+          null, // version
+          null, // parent_event_id
+          null, // tags
+          JSON.stringify(event.input),
+          JSON.stringify(event.output),
+          null, // error
+          JSON.stringify(event.metadata),
+        ]),
+      );
+    });
+
+    it("should get workflow timeline events", async () => {
+      const events = [createWorkflowTimelineEvent()];
+      mockQuery.mockResolvedValueOnce({
+        rows: events.map((event) => ({
+          id: event.id,
+          name: event.name,
+          type: event.type,
+          start_time: event.startTime,
+          end_time: event.endTime,
+          status: event.status,
+          level: event.level,
+          input: event.input,
+          output: event.output,
+          metadata: event.metadata,
+          status_message: event.statusMessage,
+          version: event.version,
+          parent_event_id: event.parentEventId,
+          tags: event.tags,
+          error: event.error,
+          trace_id: event.traceId,
+        })),
+      });
+
+      const result = await storage.getWorkflowTimelineEvents("execution-1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual(
+        expect.objectContaining({
+          name: events[0].name,
+          type: events[0].type,
+          status: events[0].status,
+        }),
+      );
+    });
+
+    it("should handle workflow timeline event errors", async () => {
+      const error = new Error("Database error");
+      mockQuery.mockRejectedValueOnce(error);
+
+      const event = createWorkflowTimelineEvent();
+      await expect(
+        storage.addTimelineEvent(event.id, event, "execution-1", "workflow-1"),
+      ).rejects.toThrow("Failed to add timeline event to PostgreSQL database");
     });
   });
 });

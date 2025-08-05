@@ -1,6 +1,7 @@
-import VoltAgent, { Agent, MCPConfiguration } from "@voltagent/core";
-import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { openai } from "@ai-sdk/openai";
+import { Agent, MCPConfiguration, VoltAgent } from "@voltagent/core";
+import { createPinoLogger } from "@voltagent/logger";
+import { VercelAIProvider } from "@voltagent/vercel-ai";
 
 async function main() {
   try {
@@ -24,10 +25,17 @@ async function main() {
       model: openai("gpt-4o-mini"),
     });
 
+    // Create logger
+    const logger = createPinoLogger({
+      name: "with-hugging-face-mcp",
+      level: "info",
+    });
+
     new VoltAgent({
       agents: {
         agent,
       },
+      logger,
     });
   } catch (error) {
     console.error("Failed to initialize VoltAgent:", error);

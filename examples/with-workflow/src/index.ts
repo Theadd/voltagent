@@ -1,184 +1,346 @@
 import { openai } from "@ai-sdk/openai";
-import { Agent, VoltAgent, VoltOpsClient, createWorkflowChain } from "@voltagent/core";
+import { Agent, VoltAgent, andThen, createWorkflowChain } from "@voltagent/core";
+import { createPinoLogger } from "@voltagent/logger";
 import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { z } from "zod";
 
-const voltOpsClient = new VoltOpsClient({
-  publicKey: process.env.VOLTOPS_PUBLIC_KEY,
-  secretKey: process.env.VOLTOPS_SECRET_KEY,
-});
-
-const languageDetectionAgent = new Agent({
-  name: "LanguageDetectionAgent",
+// Define reusable agents
+const analysisAgent = new Agent({
+  name: "AnalysisAgent",
   llm: new VercelAIProvider(),
   model: openai("gpt-4o-mini"),
-  instructions: `You are a language detection expert. Analyze the input text and determine the language it's written in. 
-  Return the language code (e.g., 'en' for English, 'es' for Spanish, 'fr' for French, 'de' for German, 'it' for Italian, 'pt' for Portuguese, 'ja' for Japanese, 'ko' for Korean, 'zh' for Chinese, 'ar' for Arabic, 'hi' for Hindi, 'ru' for Russian).
-  If the text contains multiple languages, identify the primary language.
-  If you cannot determine the language, return 'unknown'.`,
+  instructions: "You are a data analyst. Provide clear, structured analysis.",
 });
 
-const translationAgent = new Agent({
-  name: "TranslationAgent",
+const contentAgent = new Agent({
+  name: "ContentAgent",
   llm: new VercelAIProvider(),
   model: openai("gpt-4o-mini"),
-  instructions: `You are a professional translator. Translate the given text to the target language while preserving the original meaning, tone, and context.
-  Maintain the same level of formality and cultural sensitivity.
-  If the text is already in the target language, return it unchanged.
-  If translation is not possible or the target language is not supported, explain why.`,
+  instructions: "You are a content creator. Generate engaging and accurate content.",
 });
 
-// Initialize VoltAgent with VoltOps client
-new VoltAgent({
-  agents: {
-    languageDetectionAgent,
-    translationAgent,
-  },
-  voltOpsClient: voltOpsClient,
-});
+// ==============================================================================
+// Example 1: Basic Order Processing Workflow
+// Concepts: Basic steps (andThen), AI agent (andAgent), conditional logic (andWhen)
+// ==============================================================================
+const orderProcessingWorkflow = createWorkflowChain({
+  id: "order-processing",
+  name: "Order Processing Workflow",
+  purpose: "Process orders with fraud detection and special handling for VIP customers",
 
-// Create a comprehensive translation workflow
-const translationWorkflow = createWorkflowChain({
-  id: "translation-workflow",
-  name: "Multi-Language Translation Workflow",
-  purpose: "Detect language, analyze content, and translate text to target language",
+  // Define input and output schemas for type safety
   input: z.object({
-    originalText: z.string(),
-    targetLanguage: z.string(),
+    orderId: z.string(),
+    customerId: z.string(),
+    amount: z.number(),
+    items: z.array(z.string()),
   }),
   result: z.object({
-    originalText: z.string(),
-    detectedLanguage: z.string(),
-    targetLanguage: z.string(),
-    translatedText: z.string(),
-    confidence: z.number().min(0).max(1),
-    processingTime: z.number(),
+    orderId: z.string(),
+    status: z.enum(["approved", "rejected", "needs-review"]),
+    totalWithDiscount: z.number(),
   }),
 })
-  .andAgent(
-    async (data) => {
-      return `Detect the language of the following text: ${data.originalText}`;
+  // Step 1: Validate order and calculate totals
+  .andThen({
+    id: "validate-order",
+    execute: async ({ data }) => {
+      console.log(`Validating order ${data.orderId}...`);
+
+      // Simple validation logic
+      const isValid = data.amount > 0 && data.items.length > 0;
+
+      return {
+        ...data,
+        isValid,
+        baseTotal: data.amount,
+      };
     },
-    languageDetectionAgent,
+  })
+
+  // Step 2: Use AI to analyze order for fraud risk
+  .andAgent(
+    async ({ data }) => `
+      Analyze this order for fraud risk:
+      Order ID: ${data.orderId}
+      Customer ID: ${data.customerId}
+      Amount: $${data.amount}
+      Items: ${data.items.join(", ")}
+      
+      Provide risk level (low/medium/high) and reasoning.
+    `,
+    analysisAgent,
     {
       schema: z.object({
-        detectedLanguage: z.string(),
-        confidence: z.number().min(0).max(1),
+        riskLevel: z.enum(["low", "medium", "high"]),
+        reasoning: z.string(),
       }),
     },
   )
+
+  // Step 3: Calculate discount for VIP customers
   .andThen({
-    execute: async (data, state) => {
-      // If the detected language is the same as target language, skip translation
-      if (data.detectedLanguage === state.input.targetLanguage) {
+    id: "calculate-discount",
+    execute: async ({ data, getStepData }) => {
+      const orderData = getStepData("validate-order")?.output;
+
+      // Check if VIP customer qualifies for discount
+      if (orderData?.customerId.startsWith("VIP") && orderData?.amount > 100) {
+        const discount = (orderData?.baseTotal || 0) * 0.2;
+        console.log(`Applying VIP discount of $${discount}`);
+
         return {
           ...data,
-          translatedText: state.input.originalText,
-          processingTime: Date.now() - state.startAt.getTime(),
+          discount,
+          totalWithDiscount: (orderData?.baseTotal || 0) - discount,
         };
       }
 
-      // If language is unknown, return error
-      if (data.detectedLanguage === "unknown") {
-        throw new Error("Unable to detect the language of the input text");
-      }
-
-      return data;
-    },
-  })
-  .andTap({
-    id: "sleep",
-    execute: async (data) => {
-      console.log("🔄 Sleeping for 1 second");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      return data;
-    },
-  })
-  .andAgent(
-    async (data, state) => {
-      return `Translate the following text to ${data.detectedLanguage}: ${state.input.originalText}`;
-    },
-    translationAgent,
-    {
-      schema: z.object({
-        translatedText: z.string(),
-      }),
-    },
-  )
-  .andTap({
-    execute: async (data) => {
-      console.log("🔄 Translating text:", data);
-    },
-  })
-  .andThen({
-    execute: async (data, state) => {
+      // No discount
       return {
         ...data,
-        processingTime: Date.now() - state.startAt.getTime(),
+        discount: 0,
+        totalWithDiscount: orderData?.baseTotal || 0,
+      };
+    },
+  })
+
+  // Step 4: Final decision based on validation and risk
+  .andThen({
+    id: "final-decision",
+    execute: async ({ data, getStepData }) => {
+      // Get data from previous steps
+      const orderData = getStepData("validate-order")?.output;
+      const discountData = getStepData("calculate-discount")?.output;
+
+      // Determine final status
+      let status: "approved" | "rejected" | "needs-review";
+
+      if (!orderData?.isValid || data.riskLevel === "high") {
+        status = "rejected";
+      } else if (data.riskLevel === "medium") {
+        status = "needs-review";
+      } else {
+        status = "approved";
+      }
+
+      return {
+        orderId: orderData?.orderId || "",
+        status,
+        totalWithDiscount: discountData?.totalWithDiscount || orderData?.baseTotal || 0,
       };
     },
   });
 
-// Example usage function
-async function processTranslation(inputText: string, targetLanguage = "en") {
-  try {
-    const { result } = await translationWorkflow.run({
-      originalText: inputText,
-      targetLanguage,
-    });
+// ==============================================================================
+// Example 2: Human-in-the-Loop Approval Workflow
+// Concepts: Suspend/resume, step-level schemas, human intervention
+// ==============================================================================
+const expenseApprovalWorkflow = createWorkflowChain({
+  id: "expense-approval",
+  name: "Expense Approval Workflow",
+  purpose: "Process expense reports with manager approval for high amounts",
 
-    console.log("🌍 Translation Workflow Results:");
-    console.log("=".repeat(50));
-    console.log(`📝 Original Text: ${result.originalText}`);
-    console.log(
-      `🔍 Detected Language: ${result.detectedLanguage} (confidence: ${(result.confidence * 100).toFixed(1)}%)`,
-    );
-    console.log(`🎯 Target Language: ${result.targetLanguage}`);
-    console.log(`🔄 Translated Text: ${result.translatedText}`);
-    console.log(`\n⏱️  Processing Time: ${result.processingTime}ms`);
-    console.log("=".repeat(50));
+  input: z.object({
+    employeeId: z.string(),
+    amount: z.number(),
+    category: z.string(),
+    description: z.string(),
+  }),
+  result: z.object({
+    status: z.enum(["approved", "rejected"]),
+    approvedBy: z.string(),
+    finalAmount: z.number(),
+  }),
+})
+  // Step 1: Validate expense and check if approval needed
+  .andThen({
+    id: "check-approval-needed",
+    // Define what data we expect when resuming this step
+    resumeSchema: z.object({
+      approved: z.boolean(),
+      managerId: z.string(),
+      comments: z.string().optional(),
+      adjustedAmount: z.number().optional(),
+    }),
+    execute: async ({ data, suspend, resumeData }) => {
+      // If we're resuming with manager's decision
+      if (resumeData) {
+        console.log(`Manager ${resumeData.managerId} made decision`);
+        return {
+          ...data,
+          approved: resumeData.approved,
+          approvedBy: resumeData.managerId,
+          finalAmount: resumeData.adjustedAmount || data.amount,
+          managerComments: resumeData.comments,
+        };
+      }
 
-    return result;
-  } catch (error) {
-    console.error("❌ Translation workflow failed:", error);
-    throw error;
-  }
-}
+      // Check if manager approval is needed (expenses over $500)
+      if (data.amount > 500) {
+        console.log(`Expense of $${data.amount} requires manager approval`);
 
-// Example usage
-async function main() {
-  console.log("🚀 Starting VoltAgent Translation Workflow Example\n");
+        // Suspend workflow and wait for manager input
+        await suspend("Manager approval required", {
+          employeeId: data.employeeId,
+          requestedAmount: data.amount,
+          category: data.category,
+        });
+      }
 
-  // Example 1: Spanish to English
-  await processTranslation(
-    "¡Hola! Me gustaría saber más sobre el producto VoltAgent. ¿Pueden ayudarme con información sobre precios?",
-    "en",
-  );
+      // Auto-approve small expenses
+      return {
+        ...data,
+        approved: true,
+        approvedBy: "system",
+        finalAmount: data.amount,
+      };
+    },
+  })
 
-  console.log("\n");
+  // Step 2: Process the final decision
+  .andThen({
+    id: "process-decision",
+    execute: async ({ data }) => {
+      if (data.approved) {
+        console.log(`Expense approved for $${data.finalAmount}`);
+      } else {
+        console.log("Expense rejected");
+      }
 
-  // Example 2: French to English
-  await processTranslation(
-    "Bonjour! Je suis intéressé par votre service de support client. Pouvez-vous me donner plus de détails?",
-    "en",
-  );
+      return {
+        status: data.approved ? "approved" : "rejected",
+        approvedBy: data.approvedBy,
+        finalAmount: data.finalAmount,
+      };
+    },
+  });
 
-  console.log("\n");
+// ==============================================================================
+// Example 3: Multi-Step Content Analysis Workflow
+// Concepts: Step schemas, data transformation, logging with andTap
+// ==============================================================================
+const contentAnalysisWorkflow = createWorkflowChain({
+  id: "content-analysis",
+  name: "Content Analysis Workflow",
+  purpose: "Analyze content for sentiment, keywords, and generate summary",
 
-  // Example 3: German to Spanish
-  await processTranslation(
-    "Guten Tag! Ich habe eine Frage zu Ihrer API-Dokumentation. Können Sie mir helfen?",
-    "es",
-  );
+  input: z.object({
+    content: z.string(),
+    language: z.enum(["en", "es", "fr"]).default("en"),
+  }),
+  result: z.object({
+    sentiment: z.enum(["positive", "negative", "neutral"]),
+    keywords: z.array(z.string()),
+    summary: z.string(),
+    wordCount: z.number(),
+  }),
+})
+  // Step 1: Log start and prepare content
+  .andTap({
+    id: "log-start",
+    execute: async ({ data }) => {
+      console.log(`Starting analysis of ${data.content.length} characters`);
+      console.log(`Language: ${data.language}`);
+    },
+  })
 
-  console.log("\n");
+  // Step 2: Basic text analysis
+  .andThen({
+    id: "text-analysis",
+    execute: async ({ data }) => {
+      const words = data.content.split(/\s+/);
+      const wordCount = words.length;
+      const avgWordLength = words.reduce((sum, word) => sum + word.length, 0) / wordCount;
 
-  // Example 4: Japanese to English
-  await processTranslation(
-    "こんにちは!VoltAgentについて詳しく教えてください。料金プランはありますか?",
-    "en",
-  );
-}
+      return {
+        ...data,
+        wordCount,
+        avgWordLength,
+        hasQuestions: data.content.includes("?"),
+      };
+    },
+  })
 
-// Run the example
-main().catch(console.error);
+  // Step 3: AI-powered sentiment and keyword analysis
+  .andAgent(
+    async ({ data }) => `
+      Analyze this text and provide:
+      1. Overall sentiment (positive/negative/neutral)
+      2. Top 5 keywords or key phrases
+      3. A brief 2-sentence summary
+      
+      Text: "${data.content}"
+      
+      Consider that the text has ${data.wordCount} words.
+    `,
+    analysisAgent,
+    {
+      schema: z.object({
+        sentiment: z.enum(["positive", "negative", "neutral"]),
+        keywords: z.array(z.string()).max(5),
+        summary: z.string(),
+      }),
+    },
+  )
+
+  // Step 4: Transform data using only inputSchema
+  .andThen({
+    id: "transform-results",
+    inputSchema: z.object({
+      sentiment: z.enum(["positive", "negative", "neutral"]),
+      keywords: z.array(z.string()),
+      summary: z.string(),
+    }),
+    execute: async ({ data, getStepData }) => {
+      // Get word count from earlier step
+      const analysisData = getStepData("text-analysis")?.output;
+
+      // inputSchema ensures we only see sentiment, keywords, summary
+      console.log(`Analysis complete: ${data.sentiment} sentiment`);
+
+      return {
+        sentiment: data.sentiment,
+        keywords: data.keywords,
+        summary: data.summary,
+        wordCount: analysisData?.wordCount || 0,
+      };
+    },
+  })
+
+  // Step 5: Log metrics using inputSchema
+  .andTap({
+    id: "log-metrics",
+    inputSchema: z.object({
+      sentiment: z.enum(["positive", "negative", "neutral"]),
+      keywords: z.array(z.string()),
+      wordCount: z.number(),
+    }),
+    execute: async ({ data }) => {
+      console.log("\nAnalysis Metrics:");
+      console.log(`- Sentiment: ${data.sentiment}`);
+      console.log(`- Keywords: ${data.keywords.join(", ")}`);
+      console.log(`- Word count: ${data.wordCount}`);
+    },
+  });
+
+// Register workflows with VoltAgent
+
+// Create logger
+const logger = createPinoLogger({
+  name: "with-workflow",
+  level: "debug",
+});
+
+new VoltAgent({
+  agents: {
+    analysisAgent,
+    contentAgent,
+  },
+  logger,
+  workflows: {
+    orderProcessingWorkflow,
+    expenseApprovalWorkflow,
+    contentAnalysisWorkflow,
+  },
+});

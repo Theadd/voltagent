@@ -503,3 +503,306 @@ Example event: 'data: {"partialUpdate": {...}}\n\n' or 'data: {"finalObject": {.
   },
   tags: ["Agent Generation"],
 });
+
+export const WorkflowResponseSchema = z
+  .object({
+    id: z.string().openapi({ description: "Unique workflow identifier" }),
+    name: z.string().openapi({ description: "Human-readable workflow name" }),
+    purpose: z.string().openapi({ description: "Description of what the workflow does" }),
+    stepsCount: z.number().int().openapi({ description: "Number of steps in the workflow" }),
+    status: z.enum(["idle", "running", "completed", "error"]).openapi({
+      description: "Current status of the workflow",
+    }),
+  })
+  .openapi({ description: "Workflow information" });
+
+export const getWorkflowsRoute = createRoute({
+  method: "get",
+  path: "/workflows",
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            success: z.literal(true),
+            data: z
+              .array(WorkflowResponseSchema)
+              .openapi({ description: "List of registered workflows" }),
+          }),
+        },
+      },
+      description: "List of all registered workflows",
+    },
+    500: {
+      content: {
+        "application/json": {
+          schema: ErrorSchema,
+        },
+      },
+      description: "Failed to retrieve workflows",
+    },
+  },
+  tags: ["Workflow Management"],
+});
+
+// Workflow execution request schema
+export const WorkflowExecutionRequestSchema = z
+  .object({
+    input: z.any().openapi({
+      description: "Input data for the workflow",
+      example: { text: "Hello world", parameters: { format: "json" } },
+    }),
+    options: z
+      .object({
+        userId: z.string().optional(),
+        conversationId: z.string().optional(),
+        userContext: z.any().optional(),
+      })
+      .optional()
+      .openapi({ description: "Optional execution options" }),
+  })
+  .openapi({ description: "Workflow execution request" });
+
+// Workflow execution response schema
+export const WorkflowExecutionResponseSchema = z
+  .object({
+    success: z.literal(true),
+    data: z
+      .object({
+        executionId: z.string(),
+        startAt: z.string(),
+        endAt: z.string(),
+        status: z.literal("completed"),
+        result: z.any(),
+      })
+      .openapi({ description: "Workflow execution result" }),
+  })
+  .openapi({ description: "Successful workflow execution response" });
+
+// Execute workflow route
+export const executeWorkflowRoute = createRoute({
+  method: "post",
+  path: "/workflows/{id}/execute",
+  request: {
+    params: z.object({
+      id: z.string().openapi({
+        param: { name: "id", in: "path" },
+        description: "The ID of the workflow",
+        example: "my-workflow-123",
+      }),
+    }),
+    body: {
+      content: {
+        "application/json": {
+          schema: WorkflowExecutionRequestSchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: WorkflowExecutionResponseSchema,
+        },
+      },
+      description: "Successful workflow execution",
+    },
+    404: {
+      content: {
+        "application/json": {
+          schema: ErrorSchema,
+        },
+      },
+      description: "Workflow not found",
+    },
+    500: {
+      content: {
+        "application/json": {
+          schema: ErrorSchema,
+        },
+      },
+      description: "Failed to execute workflow",
+    },
+  },
+  tags: ["Workflow Management"],
+});
+
+// Workflow suspension request schema
+export const WorkflowSuspendRequestSchema = z
+  .object({
+    reason: z.string().optional().openapi({ description: "Reason for suspension" }),
+  })
+  .openapi({ description: "Workflow suspension request" });
+
+// Workflow suspension response schema
+export const WorkflowSuspendResponseSchema = z
+  .object({
+    success: z.literal(true),
+    data: z
+      .object({
+        executionId: z.string(),
+        status: z.literal("suspended"),
+        suspension: z.object({
+          suspendedAt: z.string(),
+          reason: z.string().optional(),
+        }),
+      })
+      .openapi({ description: "Workflow suspension result" }),
+  })
+  .openapi({ description: "Successful workflow suspension response" });
+
+// Suspend workflow route
+export const suspendWorkflowRoute = createRoute({
+  method: "post",
+  path: "/workflows/{id}/executions/{executionId}/suspend",
+  request: {
+    params: z.object({
+      id: z.string().openapi({
+        param: { name: "id", in: "path" },
+        description: "The ID of the workflow",
+        example: "my-workflow-123",
+      }),
+      executionId: z.string().openapi({
+        param: { name: "executionId", in: "path" },
+        description: "The ID of the execution to suspend",
+        example: "exec_1234567890_abc123",
+      }),
+    }),
+    body: {
+      content: {
+        "application/json": {
+          schema: WorkflowSuspendRequestSchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: WorkflowSuspendResponseSchema,
+        },
+      },
+      description: "Successful workflow suspension",
+    },
+    400: {
+      content: {
+        "application/json": {
+          schema: ErrorSchema,
+        },
+      },
+      description: "Cannot suspend workflow in current state",
+    },
+    404: {
+      content: {
+        "application/json": {
+          schema: ErrorSchema,
+        },
+      },
+      description: "Workflow execution not found",
+    },
+    500: {
+      content: {
+        "application/json": {
+          schema: ErrorSchema,
+        },
+      },
+      description: "Server error",
+    },
+  },
+  tags: ["Workflow Management"],
+});
+
+// Workflow resume response schema
+export const WorkflowResumeResponseSchema = z
+  .object({
+    success: z.literal(true),
+    data: z
+      .object({
+        executionId: z.string(),
+        startAt: z.string(),
+        endAt: z.string().optional(),
+        status: z.string(),
+        result: z.any(),
+      })
+      .openapi({ description: "Workflow resume result" }),
+  })
+  .openapi({ description: "Successful workflow resume response" });
+
+// Resume workflow route
+export const resumeWorkflowRoute = createRoute({
+  method: "post",
+  path: "/workflows/{id}/executions/{executionId}/resume",
+  request: {
+    params: z.object({
+      id: z.string().openapi({
+        param: { name: "id", in: "path" },
+        description: "The ID of the workflow",
+        example: "my-workflow-123",
+      }),
+      executionId: z.string().openapi({
+        param: { name: "executionId", in: "path" },
+        description: "The ID of the execution to resume",
+        example: "exec_1234567890_abc123",
+      }),
+    }),
+    body: {
+      content: {
+        "application/json": {
+          schema: z
+            .object({
+              resumeData: z
+                .any()
+                .optional()
+                .openapi({
+                  description:
+                    "Data to pass to the resumed step (validated against step's resumeSchema)",
+                  example: { approved: true, approvedBy: "manager@company.com" },
+                }),
+              options: z
+                .object({
+                  stepId: z.string().optional().openapi({
+                    description:
+                      "Optional step ID to resume from a specific step instead of the suspended one",
+                    example: "step-2",
+                  }),
+                })
+                .optional()
+                .openapi({
+                  description: "Optional resume options",
+                }),
+            })
+            .optional(),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: WorkflowResumeResponseSchema,
+        },
+      },
+      description: "Successful workflow resume",
+    },
+    404: {
+      content: {
+        "application/json": {
+          schema: ErrorSchema,
+        },
+      },
+      description: "Workflow execution not found or not suspended",
+    },
+    500: {
+      content: {
+        "application/json": {
+          schema: ErrorSchema,
+        },
+      },
+      description: "Server error",
+    },
+  },
+  tags: ["Workflow Management"],
+});

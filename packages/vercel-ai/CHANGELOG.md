@@ -1,5 +1,94 @@
 # @voltagent/vercel-ai
 
+## 0.1.17
+
+### Patch Changes
+
+- [`90a1316`](https://github.com/VoltAgent/voltagent/commit/90a131622a876c0d91e1b9046a5e1fc143fef6b5) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: improve code quality with biome linting and package configuration enhancements
+
+  This update focuses on improving code quality and package configuration across the entire VoltAgent monorepo:
+
+  **Key improvements:**
+  - **Biome Linting**: Fixed numerous linting issues identified by Biome across all packages, ensuring consistent code style and catching potential bugs
+  - **Package Configuration**: Added `publint` script to all packages for strict validation of package.json files to ensure proper publishing configuration
+  - **TypeScript Exports**: Fixed `typesVersions` structure in @voltagent/internal package and removed duplicate entries
+  - **Test Utilities**: Refactored `createTrackedStorage` function in core package by simplifying its API - removed the `testName` parameter for cleaner test setup
+  - **Type Checking**: Enabled `attw` (Are The Types Wrong) checking to ensure TypeScript types are correctly exported
+
+  These changes improve the overall maintainability and reliability of the VoltAgent framework without affecting the public API.
+
+## 0.1.16
+
+### Patch Changes
+
+- [#425](https://github.com/VoltAgent/voltagent/pull/425) [`8605e70`](https://github.com/VoltAgent/voltagent/commit/8605e708d17e6fa0150bd13235e795288422c52b) Thanks [@omeraplak](https://github.com/omeraplak)! - feat: add Promise-based properties and warnings to AI responses - #422
+
+  Enhanced AI response types to align with Vercel AI SDK's API and provide better metadata:
+
+  **For `streamObject`:**
+  - Added optional `object?: Promise<T>` property that resolves to the final generated object
+  - Added optional `usage?: Promise<UsageInfo>` property that resolves to token usage information
+  - Added optional `warnings?: Promise<any[] | undefined>` property for provider warnings
+
+  **For `streamText`:**
+  - Added optional `text?: Promise<string>` property that resolves to the full generated text
+  - Added optional `finishReason?: Promise<string>` property that resolves to the reason generation stopped
+  - Added optional `usage?: Promise<UsageInfo>` property that resolves to token usage information
+  - Added optional `reasoning?: Promise<string | undefined>` property that resolves to model's reasoning text
+
+  **For `generateText` and `generateObject`:**
+  - Added optional `reasoning?: string` property for model's reasoning text (generateText only)
+  - Added optional `warnings?: any[]` property for provider warnings
+
+  These properties are optional to maintain backward compatibility. Providers that support these features (like Vercel AI) now return these values, allowing users to access rich metadata:
+
+  ```typescript
+  // For streamObject
+  const response = await agent.streamObject(input, schema);
+  const finalObject = await response.object; // Promise<T>
+  const usage = await response.usage; // Promise<UsageInfo>
+
+  // For streamText
+  const response = await agent.streamText(input);
+  const fullText = await response.text; // Promise<string>
+  const usage = await response.usage; // Promise<UsageInfo>
+
+  // For generateText
+  const response = await agent.generateText(input);
+  console.log(response.warnings); // Any provider warnings
+  console.log(response.reasoning); // Model's reasoning (if available)
+  ```
+
+- Updated dependencies [[`8605e70`](https://github.com/VoltAgent/voltagent/commit/8605e708d17e6fa0150bd13235e795288422c52b)]:
+  - @voltagent/core@0.1.69
+
+## 0.1.15
+
+### Patch Changes
+
+- [`1f8ce22`](https://github.com/VoltAgent/voltagent/commit/1f8ce226fec449f16f1dce6c2b96cef7030eff3a) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: zod peer dependency to allow flexible versioning (^3.24.2 instead of 3.24.2) to resolve npm install conflicts
+
+- Updated dependencies [[`1f8ce22`](https://github.com/VoltAgent/voltagent/commit/1f8ce226fec449f16f1dce6c2b96cef7030eff3a)]:
+  - @voltagent/core@0.1.66
+
+## 0.1.14
+
+### Patch Changes
+
+- [#401](https://github.com/VoltAgent/voltagent/pull/401) [`4a7145d`](https://github.com/VoltAgent/voltagent/commit/4a7145debd66c7b1dfb953608e400b6c1ed02db7) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: resolve TypeScript performance issues by fixing Zod dependency configuration (#377)
+
+  Moved Zod from direct dependencies to peer dependencies in @voltagent/vercel-ai to prevent duplicate Zod installations that were causing TypeScript server slowdowns. Also standardized Zod versions across the workspace to ensure consistency.
+
+  Changes:
+  - @voltagent/vercel-ai: Moved `zod` from dependencies to peerDependencies
+  - @voltagent/docs-mcp: Updated `zod` from `^3.23.8` to `3.24.2`
+  - @voltagent/with-postgres: Updated `zod` from `^3.24.2` to `3.24.2` (removed caret)
+
+  This fix significantly improves TypeScript language server performance by ensuring only one Zod version is processed, eliminating the "Type instantiation is excessively deep and possibly infinite" errors that users were experiencing.
+
+- Updated dependencies [[`57c4874`](https://github.com/VoltAgent/voltagent/commit/57c4874d4d4807c50242b2e34ab9574fc6129888), [`da66f86`](https://github.com/VoltAgent/voltagent/commit/da66f86d92a278007c2d3386d22b482fa70d93ff), [`4a7145d`](https://github.com/VoltAgent/voltagent/commit/4a7145debd66c7b1dfb953608e400b6c1ed02db7)]:
+  - @voltagent/core@0.1.61
+
 ## 0.1.13
 
 ### Patch Changes
@@ -90,19 +179,16 @@
 ### Patch Changes
 
 - [#77](https://github.com/VoltAgent/voltagent/pull/77) [`beaa8fb`](https://github.com/VoltAgent/voltagent/commit/beaa8fb1f1bc6351f1bede0b65a6a189cc1b6ea2) Thanks [@omeraplak](https://github.com/omeraplak)! - **API & Providers:** Standardized message content format for array inputs.
-
   - The API (`/text`, `/stream`, `/object`, `/stream-object` endpoints) now strictly expects the `content` field within message objects (when `input` is an array) to be either a `string` or an `Array` of content parts (e.g., `[{ type: 'text', text: '...' }]`).
   - The previous behavior of allowing a single content object (e.g., `{ type: 'text', ... }`) directly as the value for `content` in message arrays is no longer supported in the API schema. Raw string inputs remain unchanged.
   - Provider logic (`google-ai`, `groq-ai`, `xsai`) updated to align with this stricter definition.
 
   **Console:**
-
   - **Added file and image upload functionality to the Assistant Chat.** Users can now attach multiple files/images via a button, preview attachments, and send them along with text messages.
   - Improved the Assistant Chat resizing: Replaced size toggle buttons with a draggable handle (top-left corner).
   - Chat window dimensions are now saved to local storage and restored on reload.
 
   **Internal:**
-
   - Added comprehensive test suites for Groq and XsAI providers.
 
 - Updated dependencies [[`beaa8fb`](https://github.com/VoltAgent/voltagent/commit/beaa8fb1f1bc6351f1bede0b65a6a189cc1b6ea2)]:
@@ -117,15 +203,12 @@
   This change introduces a more robust and consistent way errors and successful finishes are handled across the `@voltagent/core` Agent and LLM provider implementations (like `@voltagent/vercel-ai`).
 
   **Key Improvements:**
-
   - **Standardized Errors (`VoltAgentError`):**
-
     - Introduced `VoltAgentError`, `ToolErrorInfo`, and `StreamOnErrorCallback` types in `@voltagent/core`.
     - LLM Providers (e.g., Vercel) now wrap underlying SDK/API errors into a structured `VoltAgentError` before passing them to `onError` callbacks or throwing them.
     - Agent methods (`generateText`, `streamText`, `generateObject`, `streamObject`) now consistently handle `VoltAgentError`, enabling richer context (stage, code, tool details) in history events and logs.
 
   - **Standardized Stream Finish Results:**
-
     - Introduced `StreamTextFinishResult`, `StreamTextOnFinishCallback`, `StreamObjectFinishResult`, and `StreamObjectOnFinishCallback` types in `@voltagent/core`.
     - LLM Providers (e.g., Vercel) now construct these standardized result objects upon successful stream completion.
     - Agent streaming methods (`streamText`, `streamObject`) now receive these standardized results in their `onFinish` handlers, ensuring consistent access to final output (`text` or `object`), `usage`, `finishReason`, etc., for history, events, and hooks.
@@ -142,7 +225,6 @@
 ### Patch Changes
 
 - [#33](https://github.com/VoltAgent/voltagent/pull/33) [`3ef2eaa`](https://github.com/VoltAgent/voltagent/commit/3ef2eaa9661e8ecfebf17af56b09af41285d0ca9) Thanks [@kwaa](https://github.com/kwaa)! - Update package.json files:
-
   - Remove `src` directory from the `files` array.
   - Add explicit `exports` field for better module resolution.
 
@@ -157,7 +239,6 @@
 
   ![VoltAgent Demo](https://cdn.voltagent.dev/readme/demo.gif)
   VoltAgent aims to fix that by providing the building blocks you need:
-
   - **`@voltagent/core`**: The foundational engine for agent capabilities.
   - **`@voltagent/voice`**: Easily add voice interaction.
   - **`@voltagent/vercel-ai`**: Seamless integration with [Vercel AI SDK](https://sdk.vercel.ai/docs/introduction).

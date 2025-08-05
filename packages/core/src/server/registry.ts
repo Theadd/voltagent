@@ -1,4 +1,5 @@
-import type { Agent } from "../agent";
+import type { Logger } from "@voltagent/internal";
+import type { Agent } from "../agent/agent";
 import { AgentEventEmitter } from "../events";
 import type { VoltAgentExporter } from "../telemetry/exporter";
 import type { VoltOpsClient } from "../voltops/types";
@@ -12,6 +13,7 @@ export class AgentRegistry {
   private isInitialized = false;
   private globalVoltAgentExporter?: VoltAgentExporter;
   private globalVoltOpsClient?: VoltOpsClient;
+  private globalLogger?: Logger;
 
   /**
    * Track parent-child relationships between agents (child -> parents)
@@ -195,5 +197,19 @@ export class AgentRegistry {
    */
   public getGlobalVoltOpsClient(): VoltOpsClient | undefined {
     return this.globalVoltOpsClient;
+  }
+
+  /**
+   * Set the global Logger instance.
+   */
+  public setGlobalLogger(logger: Logger): void {
+    this.globalLogger = logger;
+  }
+
+  /**
+   * Get the global Logger instance.
+   */
+  public getGlobalLogger(): Logger | undefined {
+    return this.globalLogger;
   }
 }

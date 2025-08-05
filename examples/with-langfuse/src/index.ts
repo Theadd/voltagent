@@ -1,10 +1,11 @@
 import { Agent, VoltAgent } from "@voltagent/core";
 import { LangfuseExporter } from "@voltagent/langfuse-exporter";
+import { createPinoLogger } from "@voltagent/logger";
 import { VercelAIProvider } from "@voltagent/vercel-ai";
 
 import { openai } from "@ai-sdk/openai";
 
-import { weatherTool, searchTool, checkCalendarTool, addCalendarEventTool } from "./tools";
+import { addCalendarEventTool, checkCalendarTool, searchTool, weatherTool } from "./tools";
 
 const agent = new Agent({
   name: "Base Agent",
@@ -14,10 +15,17 @@ const agent = new Agent({
   tools: [weatherTool, searchTool, checkCalendarTool, addCalendarEventTool],
 });
 
+// Create logger
+const logger = createPinoLogger({
+  name: "with-langfuse",
+  level: "info",
+});
+
 new VoltAgent({
   agents: {
     agent,
   },
+  logger,
   telemetryExporter: [
     new LangfuseExporter({
       publicKey: process.env.LANGFUSE_PUBLIC_KEY,

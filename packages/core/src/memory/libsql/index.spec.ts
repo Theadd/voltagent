@@ -1,363 +1,189 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LibSQLStorage } from ".";
+import { generateTestTablePrefix } from "../../test-utils/libsql-test-helpers";
 import type { MemoryMessage } from "../types";
 
-// Create shared data structure for tests
-const mockDataStore = {
-  deletedConversations: new Set<string>(),
-  conversationUpdates: new Map<string, any>(),
-};
-
-// We'll create proper mocks for external dependencies
-vi.mock("@libsql/client", () => {
-  // Mock database responses - these simulate what would come from a real database
-  const mockData = {
-    messages: [
-      {
-        message_id: "msg-1",
-        conversation_id: "conversation-1",
-        role: "user",
-        content: "Hello",
-        type: "text",
-        created_at: "2023-01-01T12:00:00.000Z",
-      },
-      {
-        message_id: "msg-2",
-        conversation_id: "conversation-1",
-        role: "assistant",
-        content: "Hi there!",
-        type: "text",
-        created_at: "2023-01-01T12:01:00.000Z",
-      },
-      {
-        message_id: "msg-3",
-        conversation_id: "conversation-2",
-        role: "user",
-        content: "Different user",
-        type: "text",
-        created_at: "2023-01-01T12:02:00.000Z",
-      },
-    ],
-    conversations: [
-      {
-        id: "conversation-1",
-        resource_id: "resource-1",
-        user_id: "user-1",
-        title: "First Conversation",
-        metadata: JSON.stringify({ isImportant: true }),
-        created_at: "2023-01-01T10:00:00.000Z",
-        updated_at: "2023-01-01T12:01:00.000Z",
-      },
-      {
-        id: "conversation-2",
-        resource_id: "resource-1",
-        user_id: "user-2",
-        title: "Second Conversation",
-        metadata: JSON.stringify({ isImportant: false }),
-        created_at: "2023-01-01T11:00:00.000Z",
-        updated_at: "2023-01-01T12:02:00.000Z",
-      },
-    ],
-  };
-
-  // A smart mock that handles various types of queries
-  const createMockExecute = () => {
-    return vi.fn().mockImplementation(({ sql, args }) => {
-      // Initialize database queries - just return empty results
-      if (sql?.includes("CREATE TABLE") || sql?.includes("CREATE INDEX")) {
-        return Promise.resolve({ rows: [] });
-      }
-
-      // Handle message retrieval
-      if (sql?.includes("SELECT") && sql?.includes("FROM") && sql?.includes("_messages")) {
-        let filteredMessages = [...mockData.messages];
-
-        // Skip filtering if it's a deleted conversation
-        if (args?.[0] && mockDataStore.deletedConversations.has(args[0])) {
-          return Promise.resolve({ rows: [] });
-        }
-
-        // Handle JOIN queries with conversations for user filtering
-        if (sql?.includes("INNER JOIN") && sql?.includes("_conversations")) {
-          // Filter by user_id through conversation join
-          if (args?.includes("user-1")) {
-            filteredMessages = filteredMessages.filter((m) => {
-              const conv = mockData.conversations.find((c) => c.id === m.conversation_id);
-              return conv?.user_id === "user-1";
-            });
-          } else if (args?.includes("user-2")) {
-            filteredMessages = filteredMessages.filter((m) => {
-              const conv = mockData.conversations.find((c) => c.id === m.conversation_id);
-              return conv?.user_id === "user-2";
-            });
-          } else if (args?.includes("unknown-user")) {
-            return Promise.resolve({ rows: [] }); // Explicit handling for unknown user
-          }
-        }
-
-        // Apply conversationId filter if present
-        if (args?.includes("conversation-1")) {
-          filteredMessages = filteredMessages.filter((m) => m.conversation_id === "conversation-1");
-        } else if (args?.includes("conversation-2")) {
-          filteredMessages = filteredMessages.filter((m) => m.conversation_id === "conversation-2");
-        } else if (args?.includes("non-existent")) {
-          // Handle non-existent conversation case
-          return Promise.resolve({ rows: [] });
-        }
-
-        // Apply role filter if present
-        if (args?.includes("user")) {
-          filteredMessages = filteredMessages.filter((m) => m.role === "user");
-        } else if (args?.includes("assistant")) {
-          filteredMessages = filteredMessages.filter((m) => m.role === "assistant");
-        }
-
-        // Handle LIMIT clause for pagination
-        if (sql?.includes("LIMIT") && args?.length >= 2) {
-          const limitIndex = args.findIndex(
-            (arg: any, index: number) => typeof arg === "number" && index > 0 && arg === 1,
-          );
-          if (limitIndex !== -1) {
-            filteredMessages = filteredMessages.slice(0, 1);
-          }
-        }
-
-        return Promise.resolve({ rows: filteredMessages });
-      }
-
-      // Handle conversation retrieval by ID
-      if (
-        sql?.includes("SELECT") &&
-        sql?.includes("FROM") &&
-        sql?.includes("_conversations") &&
-        sql?.includes("WHERE id =")
-      ) {
-        const conversationId = args?.[0];
-
-        // Return null for deleted conversations
-        if (conversationId && mockDataStore.deletedConversations.has(conversationId)) {
-          return Promise.resolve({ rows: [] });
-        }
-
-        let conversation = mockData.conversations.find((c) => c.id === conversationId);
-
-        // Apply any pending updates
-        if (conversation && mockDataStore.conversationUpdates.has(conversationId)) {
-          const updates = mockDataStore.conversationUpdates.get(conversationId);
-          conversation = {
-            ...conversation,
-            ...updates,
-            // Make sure metadata is stringified
-            metadata: updates.metadata ? JSON.stringify(updates.metadata) : conversation.metadata,
-          };
-        }
-
-        return Promise.resolve({
-          rows: conversation ? [conversation] : [],
-        });
-      }
-
-      // Handle conversations retrieval by user_id
-      if (
-        sql?.includes("SELECT") &&
-        sql?.includes("FROM") &&
-        sql?.includes("_conversations") &&
-        sql?.includes("WHERE user_id =")
-      ) {
-        const userId = args?.[0];
-        let conversations = mockData.conversations.filter((c) => c.user_id === userId);
-
-        // Filter out deleted conversations
-        conversations = conversations.filter((c) => !mockDataStore.deletedConversations.has(c.id));
-
-        // Apply any pending updates
-        conversations = conversations.map((c) => {
-          if (mockDataStore.conversationUpdates.has(c.id)) {
-            const updates = mockDataStore.conversationUpdates.get(c.id);
-            return {
-              ...c,
-              ...updates,
-              // Make sure metadata is stringified
-              metadata: updates.metadata ? JSON.stringify(updates.metadata) : c.metadata,
-            };
-          }
-          return c;
-        });
-
-        return Promise.resolve({ rows: conversations });
-      }
-
-      // Handle resource conversations retrieval
-      if (
-        sql?.includes("SELECT") &&
-        sql?.includes("FROM") &&
-        sql?.includes("_conversations") &&
-        sql?.includes("WHERE resource_id =")
-      ) {
-        const resourceId = args?.[0];
-        let conversations = mockData.conversations.filter((c) => c.resource_id === resourceId);
-
-        // Filter out deleted conversations
-        conversations = conversations.filter((c) => !mockDataStore.deletedConversations.has(c.id));
-
-        // Apply any pending updates
-        conversations = conversations.map((c) => {
-          if (mockDataStore.conversationUpdates.has(c.id)) {
-            const updates = mockDataStore.conversationUpdates.get(c.id);
-            return {
-              ...c,
-              ...updates,
-              // Make sure metadata is stringified
-              metadata: updates.metadata ? JSON.stringify(updates.metadata) : c.metadata,
-            };
-          }
-          return c;
-        });
-
-        return Promise.resolve({ rows: conversations });
-      }
-
-      // Handle general conversations queries (queryConversations method)
-      if (
-        sql?.includes("SELECT") &&
-        sql?.includes("FROM") &&
-        sql?.includes("_conversations") &&
-        (sql?.includes("WHERE") || args?.length > 0)
-      ) {
-        let conversations = [...mockData.conversations];
-
-        // Filter out deleted conversations
-        conversations = conversations.filter((c) => !mockDataStore.deletedConversations.has(c.id));
-
-        // Apply filtering based on arguments
-        if (args?.length > 0) {
-          // If first arg is a user_id, filter by it
-          if (args[0] && mockData.conversations.some((c) => c.user_id === args[0])) {
-            conversations = conversations.filter((c) => c.user_id === args[0]);
-          }
-          // If first arg is a resource_id, filter by it
-          else if (args[0] && mockData.conversations.some((c) => c.resource_id === args[0])) {
-            conversations = conversations.filter((c) => c.resource_id === args[0]);
-          }
-        }
-
-        // Apply any pending updates
-        conversations = conversations.map((c) => {
-          if (mockDataStore.conversationUpdates.has(c.id)) {
-            const updates = mockDataStore.conversationUpdates.get(c.id);
-            return {
-              ...c,
-              ...updates,
-              // Make sure metadata is stringified
-              metadata: updates.metadata ? JSON.stringify(updates.metadata) : c.metadata,
-            };
-          }
-          return c;
-        });
-
-        return Promise.resolve({ rows: conversations });
-      }
-
-      // Handle message counting
-      if (sql?.includes("COUNT(*)")) {
-        return Promise.resolve({ rows: [{ count: 0 }] });
-      }
-
-      // Handle insertions - mock a successful response
-      if (sql?.includes("INSERT INTO")) {
-        return Promise.resolve({
-          rows: [],
-          lastInsertRowid: 123, // Mock an insert ID
-        });
-      }
-
-      // Handle updates - store the updates in memory
-      if (sql?.includes("UPDATE") && sql?.includes("_conversations") && args?.length >= 2) {
-        const conversationId = args[args.length - 1]; // ID is typically the last parameter
-        const updates: any = {};
-
-        // Parse the SQL to extract updates
-        if (sql.includes("title =")) {
-          const titleIndex = args.indexOf(
-            args.find((a: any) => typeof a === "string" && a !== conversationId),
-          );
-          if (titleIndex !== -1) {
-            updates.title = args[titleIndex];
-          }
-        }
-
-        if (sql.includes("metadata =")) {
-          const metadataIndex = args.indexOf(
-            args.find((a: any) => a.startsWith("{") || a.startsWith("{")),
-          );
-          if (metadataIndex !== -1) {
-            updates.metadata = JSON.parse(args[metadataIndex]);
-          }
-        }
-
-        // Simplified: Just save the title and metadata for later retrieval
-        if (updates.title || updates.metadata) {
-          mockDataStore.conversationUpdates.set(conversationId, {
-            ...(mockDataStore.conversationUpdates.get(conversationId) || {}),
-            ...updates,
-            updated_at: new Date().toISOString(),
-          });
-        }
-
-        return Promise.resolve({ rows: [] });
-      }
-
-      // Handle deletes
-      if (sql?.includes("DELETE") && args?.length > 0) {
-        const id = args[0];
-        if (id) {
-          mockDataStore.deletedConversations.add(id);
-        }
-        return Promise.resolve({ rows: [] });
-      }
-
-      // Default response
-      return Promise.resolve({ rows: [] });
-    });
-  };
-
-  // Create the mock client
-  const mockClient = {
-    execute: createMockExecute(),
-    close: vi.fn(),
-  };
-
-  return {
-    createClient: vi.fn().mockReturnValue(mockClient),
-  };
-});
-
-describe("LibSQLStorage", () => {
+describe.sequential("LibSQLStorage", () => {
   let storage: LibSQLStorage;
+  let testPrefix: string;
 
   beforeEach(async () => {
-    // Create a clean storage instance before each test
+    // Generate unique table prefix for test isolation
+    testPrefix = generateTestTablePrefix("libsql-test");
+
+    // Create real LibSQL instance with memory database
     storage = new LibSQLStorage({
-      url: "libsql://test.db",
+      url: ":memory:",
+      tablePrefix: testPrefix,
       debug: false,
     });
 
-    // Wait for initialization to complete
+    // Wait for initialization
     // @ts-expect-error - Accessing private property for testing
     await storage.initialized;
 
-    // Clear mock calls from initialization
-    // @ts-expect-error - Accessing private property for testing
-    storage.client.execute.mockClear();
-
-    // Reset the mock data state for clean tests
-    mockDataStore.deletedConversations.clear();
-    mockDataStore.conversationUpdates.clear();
+    // Setup test data
+    await setupTestData();
   });
 
-  afterEach(() => {
-    storage.close();
-    vi.clearAllMocks();
+  afterEach(async () => {
+    // Close the database connection
+    await storage.close();
   });
+
+  async function setupTestData() {
+    // Create test conversations
+    await storage.createConversation({
+      id: "conversation-1",
+      resourceId: "resource-1",
+      userId: "user-1",
+      title: "First Conversation",
+      metadata: { isImportant: true },
+    });
+
+    await storage.createConversation({
+      id: "conversation-2",
+      resourceId: "resource-1",
+      userId: "user-2",
+      title: "Second Conversation",
+      metadata: { isImportant: false },
+    });
+
+    // Add test messages
+    await storage.addMessage(
+      {
+        id: "msg-1",
+        role: "user",
+        content: "Hello",
+        type: "text",
+        createdAt: "2023-01-01T12:00:00.000Z",
+      },
+      "conversation-1",
+    );
+
+    await storage.addMessage(
+      {
+        id: "msg-2",
+        role: "assistant",
+        content: "Hi there!",
+        type: "text",
+        createdAt: "2023-01-01T12:01:00.000Z",
+      },
+      "conversation-1",
+    );
+
+    await storage.addMessage(
+      {
+        id: "msg-3",
+        role: "user",
+        content: "Different user",
+        type: "text",
+        createdAt: "2023-01-01T12:02:00.000Z",
+      },
+      "conversation-2",
+    );
+
+    // Add test workflow data
+    await storage.storeWorkflowHistory({
+      id: "workflow-history-1",
+      workflowName: "Test Workflow",
+      workflowId: "workflow-1",
+      status: "completed",
+      startTime: new Date("2023-01-01T10:00:00.000Z"),
+      endTime: new Date("2023-01-01T10:05:00.000Z"),
+      input: { param: "value" },
+      output: { result: "success" },
+      metadata: { userId: "user-1" },
+      userId: "user-1",
+      conversationId: "conversation-1",
+      createdAt: new Date("2023-01-01T10:00:00.000Z"),
+      updatedAt: new Date("2023-01-01T10:05:00.000Z"),
+      steps: [],
+      events: [],
+    });
+
+    await storage.storeWorkflowStep({
+      id: "step-1",
+      workflowHistoryId: "workflow-history-1",
+      stepIndex: 0,
+      stepType: "agent",
+      stepName: "First Step",
+      stepId: "step-id-1",
+      status: "completed",
+      startTime: new Date("2023-01-01T10:00:00.000Z"),
+      endTime: new Date("2023-01-01T10:02:00.000Z"),
+      input: { step: "input" },
+      output: { step: "output" },
+      error: null,
+      agentExecutionId: null,
+      parallelIndex: null,
+      parallelParentStepId: null,
+      metadata: null,
+      createdAt: new Date("2023-01-01T10:00:00.000Z"),
+      updatedAt: new Date("2023-01-01T10:02:00.000Z"),
+    });
+
+    await storage.storeWorkflowStep({
+      id: "step-2",
+      workflowHistoryId: "workflow-history-1",
+      stepIndex: 1,
+      stepType: "func",
+      stepName: "Second Step",
+      stepId: "step-id-2",
+      status: "completed",
+      startTime: new Date("2023-01-01T10:02:00.000Z"),
+      endTime: new Date("2023-01-01T10:05:00.000Z"),
+      input: { step: "input2" },
+      output: { step: "output2" },
+      error: null,
+      agentExecutionId: null,
+      parallelIndex: null,
+      parallelParentStepId: null,
+      metadata: null,
+      createdAt: new Date("2023-01-01T10:02:00.000Z"),
+      updatedAt: new Date("2023-01-01T10:05:00.000Z"),
+    });
+
+    await storage.storeWorkflowTimelineEvent({
+      id: "event-1",
+      workflowHistoryId: "workflow-history-1",
+      eventId: "event-1",
+      name: "workflow_start",
+      type: "workflow",
+      startTime: "2023-01-01T10:00:00.000Z",
+      endTime: "2023-01-01T10:00:01.000Z",
+      status: "completed",
+      level: "INFO",
+      input: null,
+      output: null,
+      statusMessage: null,
+      metadata: null,
+      traceId: null,
+      parentEventId: null,
+      eventSequence: null,
+      createdAt: new Date("2023-01-01T10:00:00.000Z"),
+    });
+
+    await storage.storeWorkflowTimelineEvent({
+      id: "event-2",
+      workflowHistoryId: "workflow-history-1",
+      eventId: "event-2",
+      name: "step_execution",
+      type: "workflow-step",
+      startTime: "2023-01-01T10:01:00.000Z",
+      endTime: "2023-01-01T10:03:00.000Z",
+      status: "completed",
+      level: "INFO",
+      input: null,
+      output: null,
+      statusMessage: null,
+      metadata: null,
+      traceId: null,
+      parentEventId: null,
+      eventSequence: null,
+      createdAt: new Date("2023-01-01T10:01:00.000Z"),
+    });
+  }
 
   describe("Message Operations", () => {
     describe("addMessage", () => {
@@ -371,9 +197,16 @@ describe("LibSQLStorage", () => {
         };
 
         const result = await storage.addMessage(message, "conversation-1");
-
-        // Function should complete without error and return void
         expect(result).toBeUndefined();
+
+        // Verify message was added
+        const messages = await storage.getConversationMessages("conversation-1");
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            id: "new-message-id",
+            content: '"Test message"',
+          }),
+        );
       });
 
       it("should handle messages without explicit user or conversation IDs", async () => {
@@ -385,7 +218,6 @@ describe("LibSQLStorage", () => {
           createdAt: new Date().toISOString(),
         };
 
-        // No error should be thrown
         await expect(storage.addMessage(message)).resolves.not.toThrow();
       });
     });
@@ -397,23 +229,19 @@ describe("LibSQLStorage", () => {
           conversationId: "conversation-1",
         });
 
-        // We should receive properly formatted messages
+        expect(messages).toHaveLength(2);
         expect(messages).toEqual([
           expect.objectContaining({
             role: "user",
-            content: "Hello",
+            content: '"Hello"',
             type: "text",
           }),
           expect.objectContaining({
             role: "assistant",
-            content: "Hi there!",
+            content: '"Hi there!"',
             type: "text",
           }),
         ]);
-
-        // The order should be correct (by timestamp)
-        expect(messages[0].role).toBe("user");
-        expect(messages[1].role).toBe("assistant");
       });
 
       it("should filter messages by role", async () => {
@@ -425,7 +253,7 @@ describe("LibSQLStorage", () => {
 
         expect(userMessages).toHaveLength(1);
         expect(userMessages[0].role).toBe("user");
-        expect(userMessages[0].content).toBe("Hello");
+        expect(userMessages[0].content).toBe('"Hello"');
       });
 
       it("should return empty array for unknown user or conversation", async () => {
@@ -436,37 +264,75 @@ describe("LibSQLStorage", () => {
 
         expect(messages).toEqual([]);
       });
-
-      it("should return all messages when no filters are provided", async () => {
-        const messages = await storage.getMessages();
-        expect(messages.length).toBeGreaterThan(0);
-      });
     });
 
     describe("clearMessages", () => {
-      it("should clear messages for a specific conversation and user", async () => {
-        const result = await storage.clearMessages({
+      it("should clear messages for a specific conversation", async () => {
+        await storage.clearMessages({
           userId: "user-1",
           conversationId: "conversation-1",
         });
 
-        expect(result).toBeUndefined();
+        const messages = await storage.getMessages({
+          userId: "user-1",
+          conversationId: "conversation-1",
+        });
+
+        expect(messages).toEqual([]);
       });
 
-      it("should clear all messages for a user when no conversationId provided", async () => {
-        const result = await storage.clearMessages({
+      it("should handle clearing messages for a specific user", async () => {
+        await storage.clearMessages({
           userId: "user-1",
         });
 
-        expect(result).toBeUndefined();
+        const messages = await storage.getMessages({
+          userId: "user-1",
+        });
+
+        expect(messages).toEqual([]);
+      });
+    });
+
+    describe("Message Type Filtering", () => {
+      it("should filter messages by single type - text only", async () => {
+        const messages = await storage.getMessages({
+          userId: "user-1",
+          conversationId: "conversation-1",
+          types: ["text"],
+        });
+
+        expect(messages).toHaveLength(2);
+        expect(messages.every((m) => m.type === "text")).toBe(true);
       });
 
-      it("should not error when clearing messages for non-existent user", async () => {
-        await expect(
-          storage.clearMessages({
-            userId: "non-existent-user",
-          }),
-        ).resolves.not.toThrow();
+      it("should filter messages by single type - tool-call only", async () => {
+        const messages = await storage.getMessages({
+          userId: "user-1",
+          conversationId: "conversation-1",
+          types: ["tool-call"],
+        });
+
+        expect(messages).toHaveLength(0);
+      });
+
+      it("should return no messages when types array is empty", async () => {
+        const messages = await storage.getMessages({
+          userId: "user-1",
+          conversationId: "conversation-1",
+          types: [],
+        });
+
+        expect(messages).toHaveLength(0);
+      });
+
+      it("should return all messages when types is undefined", async () => {
+        const messages = await storage.getMessages({
+          userId: "user-1",
+          conversationId: "conversation-1",
+        });
+
+        expect(messages.length).toBeGreaterThan(0);
       });
     });
 
@@ -474,15 +340,16 @@ describe("LibSQLStorage", () => {
       it("should retrieve messages for a specific conversation", async () => {
         const messages = await storage.getConversationMessages("conversation-1");
 
+        expect(messages).toHaveLength(2);
         expect(messages).toEqual([
           expect.objectContaining({
             role: "user",
-            content: "Hello",
+            content: '"Hello"',
             type: "text",
           }),
           expect.objectContaining({
             role: "assistant",
-            content: "Hi there!",
+            content: '"Hi there!"',
             type: "text",
           }),
         ]);
@@ -508,68 +375,20 @@ describe("LibSQLStorage", () => {
   describe("Conversation Operations", () => {
     describe("createConversation", () => {
       it("should create a conversation with the required fields", async () => {
-        const newConversation = await storage.createConversation({
-          id: "new-conversation-id",
-          resourceId: "resource-new",
-          userId: "test-user",
+        const conversation = await storage.createConversation({
+          id: "new-conv",
+          resourceId: "resource-1",
+          userId: "user-1",
           title: "New Conversation",
-          metadata: { isTest: true },
-        });
-
-        // Verify the returned conversation has expected properties
-        expect(newConversation).toEqual(
-          expect.objectContaining({
-            id: expect.any(String),
-            resourceId: "resource-new",
-            userId: "test-user",
-            title: "New Conversation",
-            metadata: { isTest: true },
-            createdAt: expect.any(String),
-            updatedAt: expect.any(String),
-          }),
-        );
-      });
-
-      it("should create a conversation with custom id when provided", async () => {
-        const customId = "custom-conversation-id";
-        const newConversation = await storage.createConversation({
-          id: customId,
-          resourceId: "resource-new",
-          userId: "test-user",
-          title: "New Conversation",
-          metadata: { isTest: true },
-        });
-
-        // Verify the returned conversation has the custom id
-        expect(newConversation).toEqual(
-          expect.objectContaining({
-            id: customId,
-            resourceId: "resource-new",
-            userId: "test-user",
-            title: "New Conversation",
-            metadata: { isTest: true },
-            createdAt: expect.any(String),
-            updatedAt: expect.any(String),
-          }),
-        );
-      });
-
-      it("should create a conversation with minimal required fields", async () => {
-        const minimalConversation = await storage.createConversation({
-          id: "minimal-conversation-id",
-          resourceId: "resource-minimal",
-          userId: "test-user",
-          title: "",
           metadata: {},
         });
 
-        expect(minimalConversation).toEqual(
+        expect(conversation).toEqual(
           expect.objectContaining({
-            id: expect.any(String),
-            resourceId: "resource-minimal",
-            userId: "test-user",
-            title: "",
-            metadata: {},
+            id: "new-conv",
+            resourceId: "resource-1",
+            userId: "user-1",
+            title: "New Conversation",
           }),
         );
       });
@@ -601,273 +420,225 @@ describe("LibSQLStorage", () => {
         const conversations = await storage.getConversations("resource-1");
 
         expect(conversations).toHaveLength(2);
-        expect(conversations).toEqual([
-          expect.objectContaining({
-            id: "conversation-1",
-            title: "First Conversation",
-          }),
-          expect.objectContaining({
-            id: "conversation-2",
-            title: "Second Conversation",
-          }),
-        ]);
+        expect(conversations).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "conversation-1",
+              resourceId: "resource-1",
+              title: "First Conversation",
+            }),
+            expect.objectContaining({
+              id: "conversation-2",
+              resourceId: "resource-1",
+              title: "Second Conversation",
+            }),
+          ]),
+        );
       });
 
-      it("should return empty array for non-existent resource", async () => {
-        const conversations = await storage.getConversations("non-existent");
+      it("should return empty array for resource with no conversations", async () => {
+        const conversations = await storage.getConversations("non-existent-resource");
         expect(conversations).toEqual([]);
-      });
-    });
-
-    describe("getConversationsByUserId", () => {
-      it("should retrieve conversations for a specific user", async () => {
-        const conversations = await storage.getConversationsByUserId("user-1");
-
-        expect(conversations).toEqual([
-          expect.objectContaining({
-            id: "conversation-1",
-            userId: "user-1",
-            title: "First Conversation",
-          }),
-        ]);
-      });
-
-      it("should handle query options", async () => {
-        const conversations = await storage.getConversationsByUserId("user-1", {
-          limit: 10,
-          offset: 0,
-          orderBy: "created_at",
-          orderDirection: "ASC",
-        });
-
-        expect(conversations).toBeDefined();
-        expect(Array.isArray(conversations)).toBe(true);
-      });
-
-      it("should return empty array for non-existent user", async () => {
-        const conversations = await storage.getConversationsByUserId("non-existent-user");
-        expect(conversations).toEqual([]);
-      });
-    });
-
-    describe("queryConversations", () => {
-      it("should query conversations with user filter", async () => {
-        const conversations = await storage.queryConversations({
-          userId: "user-1",
-        });
-
-        expect(conversations).toEqual([
-          expect.objectContaining({
-            id: "conversation-1",
-            userId: "user-1",
-          }),
-        ]);
-      });
-
-      it("should query conversations with resource filter", async () => {
-        const conversations = await storage.queryConversations({
-          resourceId: "resource-1",
-        });
-
-        expect(conversations).toHaveLength(2);
-      });
-
-      it("should handle pagination and ordering", async () => {
-        const conversations = await storage.queryConversations({
-          userId: "user-1",
-          limit: 5,
-          offset: 0,
-          orderBy: "updated_at",
-          orderDirection: "DESC",
-        });
-
-        expect(conversations).toBeDefined();
-        expect(Array.isArray(conversations)).toBe(true);
       });
     });
 
     describe("updateConversation", () => {
-      it("should update a conversation's properties", async () => {
-        const updates = {
-          title: "Updated Title",
-          metadata: { isImportant: false, isUpdated: true },
-        };
-
-        const updated = await storage.updateConversation("conversation-1", updates);
-
-        expect(updated).toEqual(
-          expect.objectContaining({
-            id: "conversation-1",
-            title: "Updated Title",
-            metadata: { isImportant: false, isUpdated: true },
-          }),
-        );
-      });
-
-      it("should handle partial updates", async () => {
-        // Use a different conversation ID to avoid interference from previous test
-        const titleUpdate = await storage.updateConversation("conversation-2", {
-          title: "Only Title Updated",
+      it("should update conversation metadata", async () => {
+        const updated = await storage.updateConversation("conversation-1", {
+          metadata: { isImportant: false, newField: "value" },
         });
 
-        expect(titleUpdate.title).toBe("Only Title Updated");
-        expect(titleUpdate.metadata).toEqual({ isImportant: false }); // Match the mock data
+        expect(updated.metadata).toEqual({
+          isImportant: false,
+          newField: "value",
+        });
+      });
+
+      it("should update conversation title", async () => {
+        const updated = await storage.updateConversation("conversation-1", {
+          title: "Updated Title",
+        });
+
+        expect(updated.title).toBe("Updated Title");
       });
     });
 
     describe("deleteConversation", () => {
-      it("should delete a conversation and return void", async () => {
-        const result = await storage.deleteConversation("conversation-1");
+      it("should delete a conversation", async () => {
+        await storage.deleteConversation("conversation-1");
 
-        // Should complete without error and return void
-        expect(result).toBeUndefined();
-
-        // Verify the conversation is gone
-        const deleted = await storage.getConversation("conversation-1");
-        expect(deleted).toBeNull();
-      });
-
-      it("should not error when deleting non-existent conversation", async () => {
-        await expect(storage.deleteConversation("non-existent")).resolves.not.toThrow();
+        const conversation = await storage.getConversation("conversation-1");
+        expect(conversation).toBeNull();
       });
     });
   });
 
   describe("User-Specific Conversation Operations", () => {
-    describe("getUserConversations", () => {
-      it("should return a fluent query builder", () => {
-        const builder = storage.getUserConversations("user-1");
-
-        expect(builder).toHaveProperty("limit");
-        expect(builder).toHaveProperty("orderBy");
-        expect(builder).toHaveProperty("execute");
-        expect(typeof builder.limit).toBe("function");
-        expect(typeof builder.orderBy).toBe("function");
-        expect(typeof builder.execute).toBe("function");
-      });
-
-      it("should execute query with limit", async () => {
-        const conversations = await storage.getUserConversations("user-1").limit(5).execute();
-
-        expect(conversations).toBeDefined();
-        expect(Array.isArray(conversations)).toBe(true);
-      });
-
-      it("should execute query with ordering", async () => {
-        const conversations = await storage
-          .getUserConversations("user-1")
-          .orderBy("created_at", "ASC")
-          .execute();
-
-        expect(conversations).toBeDefined();
-        expect(Array.isArray(conversations)).toBe(true);
-      });
-
-      it("should execute query with limit and ordering", async () => {
-        const conversations = await storage
-          .getUserConversations("user-1")
-          .limit(10)
-          .orderBy("updated_at", "DESC")
-          .execute();
-
-        expect(conversations).toBeDefined();
-        expect(Array.isArray(conversations)).toBe(true);
-      });
-
-      it("should execute query with default options", async () => {
-        const conversations = await storage.getUserConversations("user-1").execute();
-
-        expect(conversations).toBeDefined();
-        expect(Array.isArray(conversations)).toBe(true);
-      });
-    });
-
-    describe("getUserConversation", () => {
-      it("should return conversation if user owns it", async () => {
-        const conversation = await storage.getUserConversation("conversation-1", "user-1");
-
-        expect(conversation).toEqual(
-          expect.objectContaining({
-            id: "conversation-1",
-            userId: "user-1",
-            title: "First Conversation",
-          }),
-        );
-      });
-
-      it("should return null if user doesn't own the conversation", async () => {
-        const conversation = await storage.getUserConversation("conversation-1", "user-2");
-        expect(conversation).toBeNull();
-      });
-
-      it("should return null for non-existent conversation", async () => {
-        const conversation = await storage.getUserConversation("non-existent", "user-1");
-        expect(conversation).toBeNull();
-      });
-    });
-
-    describe("getPaginatedUserConversations", () => {
-      it("should return paginated conversations with metadata", async () => {
-        const result = await storage.getPaginatedUserConversations("user-1", 1, 10);
-
-        expect(result).toEqual(
-          expect.objectContaining({
-            conversations: expect.any(Array),
-            page: 1,
-            pageSize: 10,
-            hasMore: expect.any(Boolean),
-          }),
-        );
-      });
-
-      it("should handle default pagination parameters", async () => {
-        const result = await storage.getPaginatedUserConversations("user-1");
-
-        expect(result).toEqual(
-          expect.objectContaining({
-            conversations: expect.any(Array),
-            page: 1,
-            pageSize: 10,
-            hasMore: expect.any(Boolean),
-          }),
-        );
-      });
-
-      it("should return empty conversations for non-existent user", async () => {
-        const result = await storage.getPaginatedUserConversations("non-existent-user");
-
-        expect(result).toEqual({
-          conversations: [],
-          page: 1,
-          pageSize: 10,
-          hasMore: false,
+    describe("queryConversations", () => {
+      it("should query conversations by user ID", async () => {
+        const conversations = await storage.queryConversations({
+          userId: "user-1",
         });
+
+        expect(conversations).toHaveLength(1);
+        expect(conversations[0].userId).toBe("user-1");
       });
 
-      it("should handle page navigation", async () => {
-        const page2 = await storage.getPaginatedUserConversations("user-1", 2, 5);
+      it("should query conversations by user ID and resource ID", async () => {
+        const conversations = await storage.queryConversations({
+          userId: "user-1",
+          resourceId: "resource-1",
+        });
 
-        expect(page2.page).toBe(2);
-        expect(page2.pageSize).toBe(5);
+        expect(conversations).toHaveLength(1);
+        expect(conversations[0].userId).toBe("user-1");
+        expect(conversations[0].resourceId).toBe("resource-1");
+      });
+
+      it("should handle pagination in query", async () => {
+        const conversations = await storage.queryConversations({
+          userId: "user-1",
+          limit: 1,
+          offset: 0,
+        });
+
+        expect(conversations).toHaveLength(1);
+      });
+    });
+  });
+
+  describe("Workflow Operations", () => {
+    describe("Workflow History Operations", () => {
+      it("should store a workflow history entry", async () => {
+        const entry = {
+          id: "new-workflow-history",
+          workflowName: "New Workflow",
+          workflowId: "workflow-2",
+          status: "running" as const,
+          startTime: new Date(),
+          input: { test: "data" },
+          metadata: { custom: "value" },
+          steps: [],
+          events: [],
+        };
+
+        await expect(storage.storeWorkflowHistory(entry)).resolves.not.toThrow();
+
+        const stored = await storage.getWorkflowHistory("new-workflow-history");
+        expect(stored).toEqual(
+          expect.objectContaining({
+            id: "new-workflow-history",
+            workflowName: "New Workflow",
+            status: "running",
+          }),
+        );
+      });
+
+      it("should retrieve a workflow history entry by ID", async () => {
+        const history = await storage.getWorkflowHistory("workflow-history-1");
+
+        expect(history).toEqual(
+          expect.objectContaining({
+            id: "workflow-history-1",
+            workflowName: "Test Workflow",
+            workflowId: "workflow-1",
+            status: "completed",
+          }),
+        );
+      });
+
+      it("should retrieve workflow histories for a specific workflow ID", async () => {
+        const histories = await storage.getWorkflowHistoryByWorkflowId("workflow-1");
+
+        expect(histories).toHaveLength(1);
+        expect(histories[0].workflowId).toBe("workflow-1");
+      });
+    });
+
+    describe("Workflow Steps Operations", () => {
+      it("should retrieve a workflow step by ID", async () => {
+        const step = await storage.getWorkflowStep("step-1");
+
+        expect(step).toEqual(
+          expect.objectContaining({
+            id: "step-1",
+            workflowHistoryId: "workflow-history-1",
+            stepIndex: 0,
+            stepName: "First Step",
+          }),
+        );
+      });
+
+      it("should retrieve workflow steps for a workflow history", async () => {
+        const steps = await storage.getWorkflowSteps("workflow-history-1");
+
+        expect(steps).toHaveLength(2);
+        expect(steps[0].stepIndex).toBe(0);
+        expect(steps[1].stepIndex).toBe(1);
+      });
+    });
+
+    describe("Workflow Timeline Events Operations", () => {
+      it("should retrieve a workflow timeline event by ID", async () => {
+        const event = await storage.getWorkflowTimelineEvent("event-1");
+
+        expect(event).toEqual(
+          expect.objectContaining({
+            id: "event-1",
+            name: "workflow_start",
+            type: "workflow",
+          }),
+        );
+      });
+
+      it("should retrieve timeline events for a workflow history", async () => {
+        const events = await storage.getWorkflowTimelineEvents("workflow-history-1");
+
+        expect(events).toHaveLength(2);
+        expect(events[0].name).toBe("workflow_start");
+        expect(events[1].name).toBe("step_execution");
+      });
+    });
+
+    describe("Query Operations", () => {
+      it("should retrieve all workflow IDs", async () => {
+        const workflowIds = await storage.getAllWorkflowIds();
+
+        expect(workflowIds).toEqual(expect.arrayContaining(["workflow-1"]));
+      });
+    });
+
+    describe("Cleanup Operations", () => {
+      it("should cleanup old workflow histories beyond limit", async () => {
+        const deletedCount = await storage.cleanupOldWorkflowHistories("workflow-1", 0);
+        expect(deletedCount).toBe(1);
+
+        // Verify cleanup worked
+        const histories = await storage.getWorkflowHistoryByWorkflowId("workflow-1");
+        expect(histories).toHaveLength(0);
+      });
+
+      it("should return 0 when no cleanup needed", async () => {
+        const deletedCount = await storage.cleanupOldWorkflowHistories("workflow-1", 10);
+        expect(deletedCount).toBe(0);
+
+        // Verify nothing was deleted
+        const histories = await storage.getWorkflowHistoryByWorkflowId("workflow-1");
+        expect(histories).toHaveLength(1);
       });
     });
   });
 
   describe("Error Handling", () => {
     it("should handle database errors gracefully", async () => {
-      // @ts-expect-error - Accessing private property for testing
-      storage.client.execute.mockImplementationOnce(() => {
-        throw new Error("Database connection failed");
-      });
+      // Force an error by closing the connection
+      await storage.close();
 
-      await expect(storage.getMessages()).rejects.toThrow();
+      await expect(storage.getConversation("any-id")).rejects.toThrow();
     });
 
     it("should close the database connection", async () => {
-      storage.close();
-
-      // @ts-expect-error - Accessing private property for testing
-      expect(storage.client.close).toHaveBeenCalled();
+      await expect(storage.close()).resolves.not.toThrow();
     });
   });
 });

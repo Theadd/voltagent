@@ -62,7 +62,20 @@ Let's create your next AI application...
 ? What is your project named? (my-voltagent-app) _
 ```
 
-This command will ask you a few questions and automatically set up a VoltAgent project based on your preferences. Once the setup is complete, navigate to your project directory:
+The CLI will guide you through the setup process:
+
+1. **Project Name**: Choose a name for your project
+2. **AI Provider**: Select from OpenAI, Anthropic, Google, Groq, Mistral, or Ollama (local)
+3. **API Key** (optional): Enter your API key or skip to add it later
+4. **Package Manager**: Choose from installed package managers (npm, yarn, or pnpm)
+5. **IDE Configuration**: Optionally configure MCP Docs Server for your IDE
+
+The tool will automatically:
+
+- Create project files and structure
+- Generate a `.env` file with your API key (if provided)
+- Initialize a git repository
+- Install dependencies Once the setup is complete, navigate to your project directory:
 
 ```bash
 cd my-voltagent-app
@@ -70,13 +83,36 @@ cd my-voltagent-app
 
 ### Add Your API Key
 
-Create or edit the `.env` file in your project root and add your OpenAI API key:
+If you skipped API key entry during setup, create or edit the `.env` file in your project root and add your API key:
 
 ```bash
+# For OpenAI
 OPENAI_API_KEY=your-api-key-here
+
+# For Anthropic
+ANTHROPIC_API_KEY=your-api-key-here
+
+# For Google
+GOOGLE_GENERATIVE_AI_API_KEY=your-api-key-here
+
+# For Groq
+GROQ_API_KEY=your-api-key-here
+
+# For Mistral
+MISTRAL_API_KEY=your-api-key-here
+
+# For Ollama (no API key needed, runs locally)
+# Make sure Ollama is installed and running
 ```
 
-> **Get your API key:** Visit [OpenAI Platform](https://platform.openai.com/api-keys) to obtain your API key.
+> **Get your API key:**
+>
+> - **OpenAI**: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+> - **Anthropic**: [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+> - **Google**: [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+> - **Groq**: [console.groq.com/keys](https://console.groq.com/keys)
+> - **Mistral**: [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys)
+> - **Ollama**: [ollama.com/download](https://ollama.com/download)
 
 ### Start Your Application
 
@@ -131,6 +167,50 @@ You should receive a response from your AI agent in the chat window. This confir
 
 The `dev` script uses `tsx watch`, so it will automatically restart if you make changes to your code in the `src` directory. Press `Ctrl+C` in the terminal to stop the agent.
 
+### Explore and Run Your Workflow from the Console
+
+Your new project isn't just an agent; it's a powerful automation engine. We've included an expense approval workflow example to get you started, and you can run it directly from the VoltOps console.
+
+This workflow demonstrates how to chain together all the core steps of VoltAgent:
+
+- **Data Transformation** (`andThen`)
+- **AI Agent Calls** (`andAgent`)
+- **Parallel Processing** (`andAll`)
+- **Racing Operations** (`andRace`)
+- **Conditional Logic** (`andWhen`)
+
+#### How to Run the Workflow
+
+![VoltOps Workflow Observability](https://cdn.voltagent.dev/docs/workflow-observability-demo.gif)
+
+1.  **Go to the Workflows Page:** After starting your server, go directly to the [Workflows page](https://console.voltagent.dev/workflows).
+2.  **Select Your Project:** Use the project selector on the page to choose your newly created project (e.g., "my-agent-app").
+3.  **Find and Run the Workflow:** You will see **"Expense Approval Workflow"** listed. Click on it to open the detail page, then click the **"Run"** button.
+4.  **Provide Input:** An input form will appear. The workflow expects a JSON object with expense details. Try one of the following inputs to see how it works:
+    - For automatic approval (under $100):
+
+```json
+{
+  "amount": 75,
+  "category": "office supplies",
+  "description": "Notebooks and pens for team meeting"
+}
+```
+
+    -   For manual review (over $100):
+
+```json
+{
+  "amount": 450,
+  "category": "equipment",
+  "description": "New monitor for development workstation"
+}
+```
+
+5.  **View the Results:** After execution, you can inspect the detailed logs for each step and see the final output directly in the console.
+
+This interactive experience is a great way to understand how to build and test complex automations with VoltAgent without needing to modify your code for every run.
+
 ## Next Steps
 
 Ready to build real AI agents? Follow our step-by-step tutorial:
@@ -166,8 +246,8 @@ Create a basic TypeScript configuration file (tsconfig.json):
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "outDir": "dist",
     "strict": true
@@ -186,7 +266,7 @@ Create a basic TypeScript configuration file (tsconfig.json):
 npm install --save-dev typescript tsx @types/node @voltagent/cli
 
 # Install dependencies
-npm install @voltagent/core @voltagent/vercel-ai @ai-sdk/openai zod
+npm install @voltagent/core @voltagent/vercel-ai @ai-sdk/openai@1 zod@3
 ```
 
   </TabItem>

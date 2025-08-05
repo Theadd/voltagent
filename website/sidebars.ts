@@ -49,6 +49,23 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: "category",
+      label: "Workflows",
+      items: [
+        "workflows/overview",
+        "workflows/suspend-resume",
+        "workflows/execute-api",
+        "workflows/hooks",
+        "workflows/schemas",
+        "workflows/steps/and-then",
+        "workflows/steps/and-agent",
+        "workflows/steps/and-when",
+        "workflows/steps/and-tap",
+        "workflows/steps/and-all",
+        "workflows/steps/and-race",
+      ],
+    },
+    {
+      type: "category",
       label: "Memory",
       items: [
         "agents/memory/overview",
@@ -66,12 +83,7 @@ const sidebars: SidebarsConfig = {
     {
       type: "category",
       label: "RAG",
-      items: [
-        "rag/overview",
-        "rag/custom-retrievers",
-        "rag/chroma",
-        "rag/pinecone",
-      ],
+      items: ["rag/overview", "rag/custom-retrievers", "rag/chroma", "rag/pinecone", "rag/qdrant"],
     },
     {
       type: "category",
@@ -88,6 +100,7 @@ const sidebars: SidebarsConfig = {
         "providers/groq-ai",
         "providers/xsai",
         "providers/anthropic-ai",
+        "providers/contributing",
       ],
     },
     {
@@ -96,17 +109,14 @@ const sidebars: SidebarsConfig = {
       items: [
         "observability/overview",
         "observability/developer-console",
+        "observability/logging",
         "observability/langfuse",
       ],
     },
     {
       type: "category",
       label: "Integrations",
-      items: [
-        "integrations/overview",
-        "integrations/nextjs",
-        "integrations/vercel-ai",
-      ],
+      items: ["integrations/overview", "integrations/nextjs", "integrations/vercel-ai"],
     },
     {
       type: "category",
@@ -116,11 +126,7 @@ const sidebars: SidebarsConfig = {
     {
       type: "category",
       label: "Community",
-      items: [
-        "community/overview",
-        "community/contributing",
-        "community/licence",
-      ],
+      items: ["community/overview", "community/contributing", "community/licence"],
     },
   ],
 };

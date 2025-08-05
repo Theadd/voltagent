@@ -1,10 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { createTestLibSQLStorage } from "../test-utils/libsql-test-helpers";
 import { createWorkflow } from "./core";
+import { WorkflowRegistry } from "./registry";
 import { andThen } from "./steps";
 
-describe("workflow.run", () => {
+describe.sequential("workflow.run", () => {
+  beforeEach(() => {
+    // Clear registry before each test
+    const registry = WorkflowRegistry.getInstance();
+    (registry as any).workflows.clear();
+  });
+
   it("should return the expected result", async () => {
+    const memory = createTestLibSQLStorage("workflow_run");
+
     const workflow = createWorkflow(
       {
         id: "test",
@@ -15,22 +25,32 @@ describe("workflow.run", () => {
         result: z.object({
           name: z.string(),
         }),
+        memory,
       },
       andThen({
-        execute: async (input) => {
+        id: "step-1-join-name",
+        name: "Join with john",
+        execute: async ({ data }) => {
           return {
-            name: [input.name, "john"].join(" "),
+            name: [data.name, "john"].join(" "),
+            foo: "bar",
           };
         },
       }),
       andThen({
-        execute: async (input) => {
+        id: "step-2-add-surname",
+        name: "Add surname",
+        execute: async ({ data }) => {
           return {
-            name: [input.name, "doe"].join(" "),
+            name: [data.name, "doe"].join(" "),
           };
         },
       }),
     );
+
+    // Register workflow to registry
+    const registry = WorkflowRegistry.getInstance();
+    registry.registerWorkflow(workflow);
 
     const result = await workflow.run({
       name: "Who is",
@@ -38,12 +58,16 @@ describe("workflow.run", () => {
 
     expect(result).toEqual({
       executionId: expect.any(String),
+      workflowId: "test",
       startAt: expect.any(Date),
       endAt: expect.any(Date),
       status: "completed",
       result: {
         name: "Who is john doe",
       },
+      suspension: undefined,
+      error: undefined,
+      resume: expect.any(Function),
     });
   });
 });

@@ -150,7 +150,7 @@ Perfect for beginners. Run locally with Docker and get started immediately.
 
 ```bash
 # Start Chroma server
-npx chromadb run
+npm run chroma run
 
 # Try the example
 npm create voltagent-app@latest -- --example with-chroma
@@ -171,11 +171,23 @@ npm create voltagent-app@latest -- --example with-pinecone
 
 [**→ Full Pinecone Guide**](/docs/rag/pinecone)
 
+### Qdrant Vector Database
+
+Qdrant (read: quadrant) is an open-source vector search engine. It provides a production-ready service to store, search, and manage vectors with additional payload and extended filtering support.
+
+```bash
+npm create voltagent-app@latest -- --example with-qdrant
+```
+
+[**→ Full Qdrant Guide**](/docs/rag/qdrant)
+
 ## Choose Your Path
 
 **I want to try locally** → [Chroma Tutorial](/docs/rag/chroma) (10 mins)
 
 **I want production-ready** → [Pinecone Tutorial](/docs/rag/pinecone) (15 mins)
+
+**I want open-source and production-ready** → [Qdrant Tutorial](/docs/rag/qdrant) (10 mins)
 
 **I want to build custom** → [Build Your Own Retriever](/docs/rag/custom-retrievers)
 

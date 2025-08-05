@@ -1,13 +1,15 @@
 import { type Options as TsupConfigOptions, defineConfig } from "tsup";
+import { markAsExternalPlugin } from "../shared/tsup-plugins/mark-as-external";
 
 const baseConfig = {
   format: ["cjs", "esm"],
   splitting: false,
   sourcemap: true,
   clean: false,
-  target: "es2015",
+  target: "es2022",
   minify: false,
   dts: true,
+  esbuildPlugins: [markAsExternalPlugin],
   esbuildOptions(options) {
     options.keepNames = true;
     return options;
@@ -24,11 +26,6 @@ export default defineConfig([
     ...baseConfig,
     outDir: "dist/test",
     entry: ["src/test/index.ts"],
-  },
-  {
-    ...baseConfig,
-    outDir: "dist/dev",
-    entry: ["src/dev/index.ts"],
   },
   {
     ...baseConfig,

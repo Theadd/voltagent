@@ -1,5 +1,7 @@
 import type { BaseMessage } from "../agent/providers/base/types";
 import type { NewTimelineEvent } from "../events/types";
+import type { WorkflowHistoryEntry, WorkflowStepHistoryEntry } from "../workflow/context";
+import type { WorkflowStats, WorkflowTimelineEvent } from "../workflow/types";
 
 /**
  * Memory options
@@ -45,6 +47,12 @@ export type MessageFilterOptions = {
    * Only retrieve messages with this role
    */
   role?: BaseMessage["role"];
+
+  /**
+   * Only retrieve messages with these types
+   * If not specified, all message types are returned
+   */
+  types?: Array<"text" | "tool-call" | "tool-result">;
 };
 
 /**
@@ -200,11 +208,20 @@ export type Memory = {
   getHistoryStep(key: string): Promise<any | undefined>;
 
   /**
-   * Get all history entries for an agent
+   * Get all history entries for an agent with pagination
    * @param agentId Agent ID
-   * @returns Array of all history entries for the agent
+   * @param page Page number (0-based)
+   * @param limit Number of entries per page
+   * @returns Object with entries array and total count
    */
-  getAllHistoryEntriesByAgent(agentId: string): Promise<any[]>;
+  getAllHistoryEntriesByAgent(
+    agentId: string,
+    page: number,
+    limit: number,
+  ): Promise<{
+    entries: any[];
+    total: number;
+  }>;
 
   /**
    * Add a timeline event
@@ -220,6 +237,37 @@ export type Memory = {
     historyId: string,
     agentId: string,
   ): Promise<void>;
+
+  // Workflow History Operations
+  storeWorkflowHistory(entry: WorkflowHistoryEntry): Promise<void>;
+  getWorkflowHistory(id: string): Promise<WorkflowHistoryEntry | null>;
+  getWorkflowHistoryByWorkflowId(workflowId: string): Promise<WorkflowHistoryEntry[]>;
+  updateWorkflowHistory(id: string, updates: Partial<WorkflowHistoryEntry>): Promise<void>;
+  deleteWorkflowHistory(id: string): Promise<void>;
+
+  // Workflow Steps Operations
+  storeWorkflowStep(step: WorkflowStepHistoryEntry): Promise<void>;
+  getWorkflowStep(id: string): Promise<WorkflowStepHistoryEntry | null>;
+  getWorkflowSteps(workflowHistoryId: string): Promise<WorkflowStepHistoryEntry[]>;
+  updateWorkflowStep(id: string, updates: Partial<WorkflowStepHistoryEntry>): Promise<void>;
+  deleteWorkflowStep(id: string): Promise<void>;
+
+  // Workflow Timeline Events Operations
+  storeWorkflowTimelineEvent(event: WorkflowTimelineEvent): Promise<void>;
+  getWorkflowTimelineEvent(id: string): Promise<WorkflowTimelineEvent | null>;
+  getWorkflowTimelineEvents(workflowHistoryId: string): Promise<WorkflowTimelineEvent[]>;
+  deleteWorkflowTimelineEvent(id: string): Promise<void>;
+
+  // Query Operations
+  getAllWorkflowIds(): Promise<string[]>;
+  getWorkflowStats(workflowId: string): Promise<WorkflowStats>;
+
+  // Bulk Operations
+  getWorkflowHistoryWithStepsAndEvents(id: string): Promise<WorkflowHistoryEntry | null>;
+  deleteWorkflowHistoryWithRelated(id: string): Promise<void>;
+
+  // Cleanup Operations
+  cleanupOldWorkflowHistories(workflowId: string, maxEntries: number): Promise<number>;
 };
 
 /**

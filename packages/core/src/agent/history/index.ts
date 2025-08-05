@@ -1,7 +1,8 @@
-import { devLogger } from "@voltagent/internal/dev";
+import type { Logger } from "@voltagent/internal";
 import { v4 as uuidv4 } from "uuid";
 import { AgentEventEmitter } from "../../events";
 import type { NewTimelineEvent } from "../../events/types";
+import { getGlobalLogger } from "../../logger";
 import type { MemoryManager } from "../../memory";
 import type {
   AgentHistoryUpdatableFields,
@@ -9,9 +10,9 @@ import type {
   ExportTimelineEventPayload,
 } from "../../telemetry/client";
 import type { VoltAgentExporter } from "../../telemetry/exporter";
+import { BackgroundQueue } from "../../utils/queue/queue";
 import type { BaseMessage, StepWithContent, UsageInfo } from "../providers/base/types";
 import type { AgentStatus } from "../types";
-import { BackgroundQueue } from "../../utils/queue/queue";
 
 // Export types
 export type { HistoryStatus } from "./types";
@@ -196,6 +197,11 @@ export class HistoryManager {
   private historyQueue: BackgroundQueue;
 
   /**
+   * Logger instance
+   */
+  private logger: Logger;
+
+  /**
    * Create a new history manager
    *
    * @param agentId - Agent ID for emitting events and for storage
@@ -208,11 +214,13 @@ export class HistoryManager {
     memoryManager: MemoryManager,
     maxEntries = 0,
     voltAgentExporter?: VoltAgentExporter,
+    logger?: Logger,
   ) {
     this.agentId = agentId;
     this.memoryManager = memoryManager;
     this.maxEntries = maxEntries;
     this.voltAgentExporter = voltAgentExporter;
+    this.logger = logger || getGlobalLogger().child({ component: "history-manager", agentId });
 
     // Initialize background queue for all history operations
     this.historyQueue = new BackgroundQueue({
@@ -277,8 +285,8 @@ export class HistoryManager {
     }
 
     if (this.maxEntries > 0) {
-      const entries = await this.getEntries();
-      if (entries.length >= this.maxEntries) {
+      const result = await this.getEntries();
+      if (result.entries.length >= this.maxEntries) {
         // TODO: Implement deletion of oldest entry
       }
     }
@@ -301,7 +309,7 @@ export class HistoryManager {
     if (agentId) {
       this.queueHistoryOperation(`store-entry-${entry.id}`, async () => {
         await this.memoryManager.storeHistoryEntry(agentId, entry);
-        devLogger.debug(`[HistoryManager] History entry stored: ${entry.id}`);
+        this.logger.trace(`History entry stored: ${entry.id}`);
       });
     }
 
@@ -376,7 +384,7 @@ export class HistoryManager {
         entryId,
         historySteps,
       );
-      devLogger.debug(`[HistoryManager] Steps added to entry: ${entryId}`);
+      this.logger.trace(`Steps added to entry: ${entryId}`);
 
       if (voltAgentExporter && updatedEntry) {
         voltAgentExporter.exportHistoryStepsAsync(entryId, historySteps);
@@ -400,13 +408,31 @@ export class HistoryManager {
   }
 
   /**
-   * Get all history entries
+   * Get all history entries with optional pagination
    *
-   * @returns Array of history entries
+   * @returns Object with entries array and pagination info
    */
-  public async getEntries(): Promise<AgentHistoryEntry[]> {
-    if (!this.agentId) return [];
-    return this.memoryManager.getAllHistoryEntries(this.agentId);
+  public async getEntries(options?: { page?: number; limit?: number }): Promise<{
+    entries: AgentHistoryEntry[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  }> {
+    if (!this.agentId) {
+      return {
+        entries: [],
+        pagination: {
+          page: 0,
+          limit: 10,
+          total: 0,
+          totalPages: 0,
+        },
+      };
+    }
+    return this.memoryManager.getAllHistoryEntries(this.agentId, options);
   }
 
   /**
@@ -446,7 +472,7 @@ export class HistoryManager {
         id,
         updates as Partial<AgentHistoryEntry>,
       );
-      devLogger.debug(`[HistoryManager] History entry updated in memory: ${id}`);
+      this.logger.trace(`History entry updated in memory: ${id}`);
 
       agentEventEmitter.emitHistoryUpdate(agentId, updatedEntry);
       try {
@@ -471,7 +497,7 @@ export class HistoryManager {
           }
         }
       } catch (error) {
-        devLogger.error("Failed to update history entry:", error);
+        this.logger.error("Failed to update history entry", { error });
       }
     });
   }
@@ -491,7 +517,7 @@ export class HistoryManager {
   ): Promise<AgentHistoryEntry | undefined> {
     const agentId = this.agentId;
     if (!agentId) {
-      devLogger.warn("[HistoryManager] persistTimelineEvent called without agentId");
+      this.logger.warn("persistTimelineEvent called without agentId");
       return undefined;
     }
 
@@ -506,9 +532,7 @@ export class HistoryManager {
     return new Promise<AgentHistoryEntry | undefined>((resolve) => {
       this.queueHistoryOperation(`persist-timeline-event-${eventId}`, async () => {
         try {
-          devLogger.debug(
-            `[HistoryManager] Processing timeline event: ${eventId} for agent: ${agentId}`,
-          );
+          this.logger.trace(`Processing timeline event: ${eventId} for agent: ${agentId}`);
 
           // Persist to memory within the queue (maintains order)
           const updatedEntry = await memoryManager.addTimelineEvent(
@@ -519,12 +543,12 @@ export class HistoryManager {
           );
 
           if (!updatedEntry) {
-            devLogger.warn(`[HistoryManager] Failed to persist timeline event: ${eventId}`);
+            this.logger.warn(`Failed to persist timeline event: ${eventId}`);
             resolve(undefined);
             return;
           }
 
-          devLogger.debug(`[HistoryManager] Timeline event persisted successfully: ${eventId}`);
+          this.logger.trace(`Timeline event persisted successfully: ${eventId}`);
 
           // Queue telemetry export separately (non-blocking, preserves event order)
           if (voltAgentExporter && event.id) {
@@ -542,7 +566,7 @@ export class HistoryManager {
           // Resolve with the updated entry
           resolve(updatedEntry);
         } catch (error) {
-          devLogger.error(`[HistoryManager] Error persisting timeline event ${eventId}:`, error);
+          this.logger.error(`Error persisting timeline event ${eventId}`, { error });
           resolve(undefined);
         }
       });

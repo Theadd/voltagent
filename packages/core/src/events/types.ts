@@ -54,13 +54,20 @@ export interface StandardTimelineEvent {
 /**
  * Defines the main category of a TimelineEvent.
  */
-export type TimelineEventCoreType = "agent" | "tool" | "memory" | "retriever";
+export type TimelineEventCoreType =
+  | "agent"
+  | "tool"
+  | "memory"
+  | "retriever"
+  | "workflow"
+  | "workflow-step";
 
 /**
  * Defines the operational status of a TimelineEvent.
  * 'idle' is added for consistency with frontend initial states.
+ * 'suspended' is added for workflow suspension state.
  */
-export type TimelineEventCoreStatus = "idle" | "running" | "completed" | "error";
+export type TimelineEventCoreStatus = "idle" | "running" | "completed" | "error" | "suspended";
 
 /**
  * Defines the severity level of a TimelineEvent.
@@ -139,6 +146,36 @@ export interface AgentSuccessEventMetadata extends BaseEventMetadata {
 
 export interface MemoryEventMetadata extends BaseEventMetadata {
   type?: string;
+}
+
+// --- Workflow Event Metadata ---
+export interface WorkflowEventMetadata extends BaseEventMetadata {
+  workflowId: string;
+  workflowName: string;
+  executionId: string;
+  currentStep?: number;
+  totalSteps: number;
+  eventSequence?: number;
+}
+
+export interface WorkflowStepEventMetadata extends BaseEventMetadata {
+  workflowId: string;
+  workflowName: string;
+  executionId: string;
+  stepIndex: number;
+  stepType: "agent" | "func" | "conditional-when" | "parallel-all" | "parallel-race";
+  stepName: string;
+  // Agent step için
+  agentId?: string;
+  agentName?: string;
+  // Parallel step için
+  parallelIndex?: number;
+  parallelParentEventId?: string;
+  isSkipped?: boolean;
+  eventSequence?: number;
+  // ✅ NEW: Function content for historical tracking (execute, task, condition functions)
+  stepFunction?: string;
+  taskString?: string; // Agent step'lerde task string için ayrı tutuyoruz
 }
 
 /**
@@ -265,8 +302,69 @@ export type RetrieverErrorEvent = BaseTimelineEvent<BaseEventMetadata> & {
   level: "ERROR" | "CRITICAL";
 };
 
-// The main TimelineEvent type
-export type NewTimelineEvent =
+// --- Workflow Event Types ---
+export type WorkflowStartEvent = BaseTimelineEvent<WorkflowEventMetadata> & {
+  name: "workflow:start";
+  type: "workflow";
+  status: "running";
+};
+
+export type WorkflowSuccessEvent = BaseTimelineEvent<WorkflowEventMetadata> & {
+  name: "workflow:success";
+  type: "workflow";
+  status: "completed";
+};
+
+export type WorkflowErrorEvent = BaseTimelineEvent<WorkflowEventMetadata> & {
+  name: "workflow:error";
+  type: "workflow";
+  status: "error";
+  level: "ERROR" | "CRITICAL";
+};
+
+export type WorkflowSuspendEvent = BaseTimelineEvent<WorkflowEventMetadata> & {
+  name: "workflow:suspend";
+  type: "workflow";
+  status: "suspended";
+  statusMessage?: {
+    reason?: string;
+    suspendedAt: string;
+    suspendedStepIndex: number;
+  };
+};
+
+// --- Workflow Step Event Types ---
+export type WorkflowStepStartEvent = BaseTimelineEvent<WorkflowStepEventMetadata> & {
+  name: "workflow-step:start";
+  type: "workflow-step";
+  status: "running";
+};
+
+export type WorkflowStepSuccessEvent = BaseTimelineEvent<WorkflowStepEventMetadata> & {
+  name: "workflow-step:success";
+  type: "workflow-step";
+  status: "completed";
+};
+
+export type WorkflowStepErrorEvent = BaseTimelineEvent<WorkflowStepEventMetadata> & {
+  name: "workflow-step:error";
+  type: "workflow-step";
+  status: "error";
+  level: "ERROR" | "CRITICAL";
+};
+
+export type WorkflowStepSuspendEvent = BaseTimelineEvent<WorkflowStepEventMetadata> & {
+  name: "workflow-step:suspend";
+  type: "workflow-step";
+  status: "suspended";
+  statusMessage?: {
+    reason?: string;
+    suspendedAt: string;
+  };
+};
+
+// Agent-only events (no workflow events - they use WorkflowEventEmitter)
+export type AgentTimelineEvent =
   | ToolStartEvent
   | ToolSuccessEvent
   | ToolErrorEvent
@@ -282,4 +380,18 @@ export type NewTimelineEvent =
   | RetrieverStartEvent
   | RetrieverSuccessEvent
   | RetrieverErrorEvent;
+
+// Workflow-only events (handled by WorkflowEventEmitter)
+export type WorkflowTimelineEvent =
+  | WorkflowStartEvent
+  | WorkflowSuccessEvent
+  | WorkflowErrorEvent
+  | WorkflowSuspendEvent
+  | WorkflowStepStartEvent
+  | WorkflowStepSuccessEvent
+  | WorkflowStepErrorEvent
+  | WorkflowStepSuspendEvent;
+
+// The main TimelineEvent type (backward compatibility)
+export type NewTimelineEvent = AgentTimelineEvent | WorkflowTimelineEvent;
 // ... other specific event types will be added here (if any more emerge)

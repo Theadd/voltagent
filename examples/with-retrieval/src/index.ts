@@ -1,6 +1,7 @@
-import { VoltAgent, Agent } from "@voltagent/core";
-import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { openai } from "@ai-sdk/openai";
+import { Agent, VoltAgent } from "@voltagent/core";
+import { createPinoLogger } from "@voltagent/logger";
+import { VercelAIProvider } from "@voltagent/vercel-ai";
 
 // Import the retrieval tool
 import { retriever } from "./retriever/index.js";
@@ -26,9 +27,17 @@ const agentWithTools = new Agent({
 });
 
 // Initialize the VoltAgent
+
+// Create logger
+const logger = createPinoLogger({
+  name: "with-retrieval",
+  level: "info",
+});
+
 new VoltAgent({
   agents: {
     agent,
     agentWithTools,
   },
+  logger,
 });

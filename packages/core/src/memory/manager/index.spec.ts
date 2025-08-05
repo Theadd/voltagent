@@ -1,4 +1,4 @@
-import { vi, describe, expect, it, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryManager } from ".";
 import type { AgentHistoryEntry } from "../../agent/history";
 import type { BaseMessage } from "../../agent/providers/base/types";
@@ -25,6 +25,8 @@ vi.mock("../../server/registry", () => {
     AgentRegistry: {
       getInstance: vi.fn().mockReturnValue({
         getAgent: vi.fn().mockReturnValue(mockAgent),
+        getGlobalLogger: vi.fn().mockReturnValue(undefined),
+        setGlobalLogger: vi.fn(),
       }),
     },
   };
@@ -40,6 +42,62 @@ vi.mock("../../events", () => {
         emitHistoryUpdate: vi.fn(),
       }),
     },
+  };
+});
+
+// Mock the main logger module
+vi.mock("../../logger", () => {
+  const createMockLogger = () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    child: vi.fn(() => createMockLogger()),
+  });
+
+  return {
+    getGlobalLogger: vi.fn(() => createMockLogger()),
+    LogEvents: {
+      MEMORY_OPERATION_FAILED: "memory.operation.failed",
+    },
+    LoggerProxy: vi.fn().mockImplementation(() => createMockLogger()),
+  };
+});
+
+// Mock the console logger
+vi.mock("../../logger/console-logger", () => {
+  const createMockLogger = () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    child: vi.fn(() => createMockLogger()),
+  });
+
+  const mockLogger = createMockLogger();
+
+  return {
+    createConsoleLogger: vi.fn().mockReturnValue(mockLogger),
+    getDefaultLogBuffer: vi.fn().mockReturnValue({
+      add: vi.fn(),
+      push: vi.fn(),
+      clear: vi.fn(),
+      query: vi.fn().mockReturnValue([]),
+      getEntries: vi.fn().mockReturnValue([]),
+      on: vi.fn(),
+      off: vi.fn(),
+    }),
+    InMemoryLogBuffer: vi.fn().mockImplementation(() => ({
+      add: vi.fn(),
+      query: vi.fn(() => []),
+      clear: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+    })),
   };
 });
 
@@ -59,6 +117,23 @@ const createMockContext = (): OperationContext => {
     isActive: true,
     operationId: "test-operation",
     userContext: new Map(),
+    logger: {
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      child: vi.fn(() => ({
+        trace: vi.fn(),
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        fatal: vi.fn(),
+        child: vi.fn(),
+      })),
+    },
   };
 };
 
@@ -101,12 +176,20 @@ class MockMemory implements Memory {
   }
 
   async getMessages(options: any): Promise<MemoryMessage[]> {
-    const { userId, conversationId = "default", limit = 10 } = options;
+    const { userId, conversationId = "default", limit = 10, types } = options;
     const key = `${userId}:${conversationId}`;
     if (!this.messages[key]) {
       return [];
     }
-    return this.messages[key].slice(-limit);
+
+    let filteredMessages = this.messages[key];
+
+    // Apply types filter if specified
+    if (types) {
+      filteredMessages = filteredMessages.filter((msg) => types.includes(msg.type));
+    }
+
+    return filteredMessages.slice(-limit);
   }
 
   async clearMessages(options: any): Promise<void> {
@@ -166,8 +249,22 @@ class MockMemory implements Memory {
     return this.historyEntries[id] || null;
   }
 
-  async getAllHistoryEntriesByAgent(agentId: string): Promise<any[]> {
-    return Object.values(this.historyEntries).filter((entry) => entry._agentId === agentId);
+  async getAllHistoryEntriesByAgent(
+    agentId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ entries: any[]; total: number }> {
+    const allEntries = Object.values(this.historyEntries).filter(
+      (entry) => entry._agentId === agentId,
+    );
+    const start = page * limit;
+    const end = start + limit;
+    const entries = allEntries.slice(start, end);
+
+    return {
+      entries,
+      total: allEntries.length,
+    };
   }
 
   async addHistoryEvent(id: string, event: any, historyId: string, agentId: string): Promise<any> {
@@ -315,6 +412,88 @@ class MockMemory implements Memory {
   setCurrentUserId(userId: string): void {
     this.currentUserId = userId;
   }
+
+  // Workflow History Operations (stub implementations for testing)
+  async storeWorkflowHistory(_entry: any): Promise<void> {
+    // Stub implementation
+  }
+
+  async getWorkflowHistory(_id: string): Promise<any | null> {
+    return null;
+  }
+
+  async getWorkflowHistoryByWorkflowId(_workflowId: string): Promise<any[]> {
+    return [];
+  }
+
+  async updateWorkflowHistory(_id: string, _updates: any): Promise<void> {
+    // Stub implementation
+  }
+
+  async deleteWorkflowHistory(_id: string): Promise<void> {
+    // Stub implementation
+  }
+
+  // Workflow Steps Operations (stub implementations for testing)
+  async storeWorkflowStep(_step: any): Promise<void> {
+    // Stub implementation
+  }
+
+  async getWorkflowStep(_id: string): Promise<any | null> {
+    return null;
+  }
+
+  async getWorkflowSteps(_workflowHistoryId: string): Promise<any[]> {
+    return [];
+  }
+
+  async updateWorkflowStep(_id: string, _updates: any): Promise<void> {
+    // Stub implementation
+  }
+
+  async deleteWorkflowStep(_id: string): Promise<void> {
+    // Stub implementation
+  }
+
+  // Workflow Timeline Events Operations (stub implementations for testing)
+  async storeWorkflowTimelineEvent(_event: any): Promise<void> {
+    // Stub implementation
+  }
+
+  async getWorkflowTimelineEvent(_id: string): Promise<any | null> {
+    return null;
+  }
+
+  async getWorkflowTimelineEvents(_workflowHistoryId: string): Promise<any[]> {
+    return [];
+  }
+
+  async deleteWorkflowTimelineEvent(_id: string): Promise<void> {
+    // Stub implementation
+  }
+
+  // Query Operations (stub implementations for testing)
+  async getAllWorkflowIds(): Promise<string[]> {
+    return [];
+  }
+
+  async getWorkflowStats(_workflowId: string): Promise<any> {
+    return { totalRuns: 0, successCount: 0, errorCount: 0 };
+  }
+
+  // Bulk Operations (stub implementations for testing)
+  async getWorkflowHistoryWithStepsAndEvents(_id: string): Promise<any | null> {
+    return null;
+  }
+
+  async deleteWorkflowHistoryWithRelated(_id: string): Promise<void> {
+    // Stub implementation
+  }
+
+  // Cleanup Operations (stub implementations for testing)
+  async cleanupOldWorkflowHistories(_workflowId: string, _maxEntries: number): Promise<number> {
+    return 0;
+  }
 }
 
 describe("MemoryManager", () => {
@@ -389,6 +568,58 @@ describe("MemoryManager", () => {
       expect(messages[1].content).toBe("Response 1");
       expect(messages[2].role).toBe("user");
       expect(messages[2].content).toBe("Message 2");
+    });
+
+    it("should filter out tool-call and tool-result messages from context", async () => {
+      // Add messages with different types as MemoryMessages
+      await mockMemory.addMessage(
+        {
+          id: "msg-4",
+          role: "assistant",
+          content: JSON.stringify({ tool: "calculator", args: { a: 1, b: 2 } }),
+          type: "tool-call",
+          createdAt: new Date().toISOString(),
+        },
+        "conversation1",
+      );
+
+      await mockMemory.addMessage(
+        {
+          id: "msg-5",
+          role: "tool",
+          content: JSON.stringify({ result: 3 }),
+          type: "tool-result",
+          createdAt: new Date().toISOString(),
+        },
+        "conversation1",
+      );
+
+      await mockMemory.addMessage(
+        {
+          id: "msg-6",
+          role: "assistant",
+          content: "The result is 3",
+          type: "text",
+          createdAt: new Date().toISOString(),
+        },
+        "conversation1",
+      );
+
+      const { messages } = await memoryManager.prepareConversationContext(
+        mockContext,
+        "New message",
+        "user1",
+        "conversation1",
+      );
+
+      // Should only get text messages
+      expect(messages.length).toBe(4); // 3 from beforeEach + 1 new text message
+      expect(messages[3].content).toBe("The result is 3");
+
+      // Verify that tool-related messages were not included
+      const contents = messages.map((m) => m.content);
+      expect(contents).not.toContain(JSON.stringify({ tool: "calculator", args: { a: 1, b: 2 } }));
+      expect(contents).not.toContain(JSON.stringify({ result: 3 }));
     });
 
     it("should respect the limit parameter", async () => {
@@ -704,12 +935,12 @@ describe("MemoryManager - History Management", () => {
       "different-agent",
     );
 
-    const entries = await memoryManager.getAllHistoryEntries(agentId);
+    const result = await memoryManager.getAllHistoryEntries(agentId);
 
-    expect(entries.length).toBe(2);
-    expect(entries.map((e) => e.id)).toContain("entry1");
-    expect(entries.map((e) => e.id)).toContain("entry2");
-    expect(entries.map((e) => e.id)).not.toContain("entry3");
+    expect(result.entries.length).toBe(2);
+    expect(result.entries.map((e) => e.id)).toContain("entry1");
+    expect(result.entries.map((e) => e.id)).toContain("entry2");
+    expect(result.entries.map((e) => e.id)).not.toContain("entry3");
   });
 
   it("should update history entry", async () => {
@@ -1058,11 +1289,9 @@ describe("MemoryManager - ConversationMemory Tests", () => {
 describe("MemoryManager - HistoryMemory Tests", () => {
   let memoryManager: MemoryManager;
   let mockMemory: MockMemory;
-  let mockContext: OperationContext;
 
   beforeEach(() => {
     mockMemory = new MockMemory();
-    mockContext = createMockContext();
   });
 
   describe("historyMemory is always available", () => {
@@ -1153,12 +1382,12 @@ describe("MemoryManager - HistoryMemory Tests", () => {
       // Add entry for other agent
       await mockMemory.addHistoryEntry("entry3", { id: "entry3", input: "input3" }, otherAgentId);
 
-      const entries = await memoryManager.getAllHistoryEntries(agentId);
+      const result = await memoryManager.getAllHistoryEntries(agentId);
 
-      expect(entries.length).toBe(2);
-      expect(entries.map((e) => e.id)).toContain("entry1");
-      expect(entries.map((e) => e.id)).toContain("entry2");
-      expect(entries.map((e) => e.id)).not.toContain("entry3");
+      expect(result.entries.length).toBe(2);
+      expect(result.entries.map((e) => e.id)).toContain("entry1");
+      expect(result.entries.map((e) => e.id)).toContain("entry2");
+      expect(result.entries.map((e) => e.id)).not.toContain("entry3");
     });
 
     it("should update history entry using historyMemory", async () => {

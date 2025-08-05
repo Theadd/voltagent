@@ -2,12 +2,15 @@
  * Basic type definitions for VoltAgent Core
  */
 
-import type { Agent } from "./agent";
-import type { CustomEndpointDefinition } from "./server/custom-endpoints";
-
 import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
+import type { Logger } from "@voltagent/internal";
+import type { DangerouslyAllowAny } from "@voltagent/internal/types";
+import type { Agent } from "./agent/agent";
+import type { CustomEndpointDefinition } from "./server/custom-endpoints";
 import type { VoltAgentExporter } from "./telemetry/exporter";
-import type { VoltOpsClient } from "./voltops/types";
+import type { VoltOpsClient } from "./voltops";
+import type { WorkflowChain } from "./workflow/chain";
+import type { Workflow } from "./workflow/types";
 
 // Re-export VoltOps types for convenience
 export type {
@@ -57,6 +60,21 @@ export type ServerOptions = {
 export type VoltAgentOptions = {
   agents: Record<string, Agent<any>>;
   /**
+   * Optional workflows to register with VoltAgent
+   * Can be either Workflow instances or WorkflowChain instances
+   */
+  workflows?: Record<
+    string,
+    | Workflow<DangerouslyAllowAny, DangerouslyAllowAny, DangerouslyAllowAny, DangerouslyAllowAny>
+    | WorkflowChain<
+        DangerouslyAllowAny,
+        DangerouslyAllowAny,
+        DangerouslyAllowAny,
+        DangerouslyAllowAny,
+        DangerouslyAllowAny
+      >
+  >;
+  /**
    * Server configuration options
    */
   server?: ServerOptions;
@@ -66,6 +84,12 @@ export type VoltAgentOptions = {
    * Replaces the old telemetryExporter approach with a comprehensive solution.
    */
   voltOpsClient?: VoltOpsClient;
+
+  /**
+   * Global logger instance to use across all agents and workflows
+   * If not provided, a default logger will be created
+   */
+  logger?: Logger;
 
   /**
    * @deprecated Use `voltOpsClient` instead. Will be removed in a future version.

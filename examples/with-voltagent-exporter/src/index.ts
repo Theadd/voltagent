@@ -1,8 +1,9 @@
-import { Agent, VoltAgent, VoltOpsClient } from "@voltagent/core";
-import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { openai } from "@ai-sdk/openai";
+import { Agent, VoltAgent, VoltOpsClient } from "@voltagent/core";
+import { createPinoLogger } from "@voltagent/logger";
+import { VercelAIProvider } from "@voltagent/vercel-ai";
 
-import { weatherTool, searchTool, checkCalendarTool, addCalendarEventTool } from "./tools";
+import { addCalendarEventTool, checkCalendarTool, searchTool, weatherTool } from "./tools";
 
 const agent = new Agent({
   name: "Base Agent",
@@ -12,10 +13,17 @@ const agent = new Agent({
   tools: [weatherTool, searchTool, checkCalendarTool, addCalendarEventTool],
 });
 
+// Create logger
+const logger = createPinoLogger({
+  name: "with-voltagent-exporter",
+  level: "info",
+});
+
 new VoltAgent({
   agents: {
     agent,
   },
+  logger,
   voltOpsClient: new VoltOpsClient({
     publicKey: process.env.VOLTAGENT_PUBLIC_KEY,
     secretKey: process.env.VOLTAGENT_SECRET_KEY,

@@ -1,6 +1,13 @@
 import { z } from "zod";
-import { type AgentTool, createTool } from "../../tool";
 import type { ToolExecuteOptions } from "../../agent/providers";
+import { LogEvents } from "../../logger/events";
+import {
+  ActionType,
+  ResourceType,
+  buildLogContext,
+  buildRetrieverLogMessage,
+} from "../../logger/message-builder";
+import { type AgentTool, createTool } from "../../tool";
 import type { Retriever } from "../types";
 
 /**
@@ -41,14 +48,46 @@ export const createRetrieverTool = (
       query: z.string().describe("The search query to find relevant information"),
     }),
     execute: async ({ query }, executeOptions?: ToolExecuteOptions) => {
-      // Extract userContext from tool execution context
+      // Extract userContext and logger from tool execution context
       const userContext = executeOptions?.operationContext?.userContext;
+      const logger = executeOptions?.operationContext?.logger;
+      const startTime = Date.now();
 
-      const result = await retriever.retrieve(query, {
-        userContext,
-      });
+      logger?.debug(
+        buildRetrieverLogMessage(toolName, ActionType.START, "search started"),
+        buildLogContext(ResourceType.RETRIEVER, toolName, ActionType.START, {
+          event: LogEvents.RETRIEVER_SEARCH_STARTED,
+          query,
+        }),
+      );
 
-      return result;
+      try {
+        const result = await retriever.retrieve(query, {
+          userContext,
+          logger,
+        });
+
+        logger?.debug(
+          buildRetrieverLogMessage(toolName, ActionType.COMPLETE, "search completed"),
+          buildLogContext(ResourceType.RETRIEVER, toolName, ActionType.COMPLETE, {
+            event: LogEvents.RETRIEVER_SEARCH_COMPLETED,
+            duration: Date.now() - startTime,
+            result,
+          }),
+        );
+
+        return result;
+      } catch (error) {
+        logger?.error(
+          buildRetrieverLogMessage(toolName, ActionType.ERROR, "search failed"),
+          buildLogContext(ResourceType.RETRIEVER, toolName, ActionType.ERROR, {
+            event: LogEvents.RETRIEVER_SEARCH_FAILED,
+            query,
+            error,
+          }),
+        );
+        throw error;
+      }
     },
   });
 };

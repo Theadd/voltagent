@@ -1,6 +1,7 @@
-import { VoltAgent, Agent, BaseRetriever, type BaseMessage } from "@voltagent/core";
-import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { openai } from "@ai-sdk/openai";
+import { Agent, type BaseMessage, BaseRetriever, VoltAgent } from "@voltagent/core";
+import { createPinoLogger } from "@voltagent/logger";
+import { VercelAIProvider } from "@voltagent/vercel-ai";
 
 // --- Simple Knowledge Base Retriever ---
 
@@ -63,9 +64,16 @@ const ragAgent = new Agent({
 
 // --- VoltAgent Initialization ---
 
+// Create logger
+const logger = createPinoLogger({
+  name: "with-rag-chatbot",
+  level: "info",
+});
+
 new VoltAgent({
   agents: {
     // Make the agent available under the key 'ragAgent'
     ragAgent,
   },
+  logger,
 });

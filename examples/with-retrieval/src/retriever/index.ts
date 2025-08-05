@@ -1,4 +1,4 @@
-import { BaseRetriever, type BaseMessage, type RetrieveOptions } from "@voltagent/core";
+import { type BaseMessage, BaseRetriever, type RetrieveOptions } from "@voltagent/core";
 import { documents } from "../data/documents.js";
 
 /**
@@ -38,6 +38,8 @@ export class SimpleRetriever extends BaseRetriever {
   async retrieve(input: string | BaseMessage[], options: RetrieveOptions): Promise<string> {
     // Convert input to searchable string
     let searchText = "";
+
+    options.logger?.debug("selam");
 
     if (typeof input === "string") {
       searchText = input;

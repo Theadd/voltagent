@@ -1,5 +1,33 @@
 # @voltagent/anthropic-ai
 
+## 0.1.13
+
+### Patch Changes
+
+- [`90a1316`](https://github.com/VoltAgent/voltagent/commit/90a131622a876c0d91e1b9046a5e1fc143fef6b5) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: improve code quality with biome linting and package configuration enhancements
+
+  This update focuses on improving code quality and package configuration across the entire VoltAgent monorepo:
+
+  **Key improvements:**
+  - **Biome Linting**: Fixed numerous linting issues identified by Biome across all packages, ensuring consistent code style and catching potential bugs
+  - **Package Configuration**: Added `publint` script to all packages for strict validation of package.json files to ensure proper publishing configuration
+  - **TypeScript Exports**: Fixed `typesVersions` structure in @voltagent/internal package and removed duplicate entries
+  - **Test Utilities**: Refactored `createTrackedStorage` function in core package by simplifying its API - removed the `testName` parameter for cleaner test setup
+  - **Type Checking**: Enabled `attw` (Are The Types Wrong) checking to ensure TypeScript types are correctly exported
+
+  These changes improve the overall maintainability and reliability of the VoltAgent framework without affecting the public API.
+
+## 0.1.12
+
+### Patch Changes
+
+- [#421](https://github.com/VoltAgent/voltagent/pull/421) [`21d499a`](https://github.com/VoltAgent/voltagent/commit/21d499ac44f4a821df36b53c04e6dfa231333dda) Thanks [@tawanorg](https://github.com/tawanorg)! - fix(anthropic-ai): improve generateObject JSON formatting with explicit system prompt
+
+  Enhanced system prompt to prevent AI from wrapping JSON responses in markdown code blocks, fixing JSON parsing errors in generateObject method.
+
+- Updated dependencies [[`089c039`](https://github.com/VoltAgent/voltagent/commit/089c03993e3b9e05655a1108355e7bee940d33a7)]:
+  - @voltagent/core@0.1.68
+
 ## 0.1.11
 
 ### Patch Changes
@@ -37,7 +65,6 @@
   ```
 
   New exports:
-
   - `createAsyncIterableStream`
   - `type AsyncIterableStream`
 
@@ -66,7 +93,6 @@
 - [#149](https://github.com/VoltAgent/voltagent/pull/149) [`0137a4e`](https://github.com/VoltAgent/voltagent/commit/0137a4e67deaa2490b4a07f9de5f13633f2c473c) Thanks [@VenomHare](https://github.com/VenomHare)! - Added JSON schema support for REST API `generateObject` and `streamObject` functions. The system now accepts JSON schemas which are internally converted to Zod schemas for validation. This enables REST API usage where Zod schemas cannot be directly passed. #87
 
   Additional Changes:
-
   - Included the JSON schema from `options.schema` in the system message for the `generateObject` and `streamObject` functions in both `anthropic-ai` and `groq-ai` providers.
   - Enhanced schema handling to convert JSON schemas to Zod internally for seamless REST API compatibility.
 
@@ -93,24 +119,19 @@
 ### Patch Changes
 
 - [#110](https://github.com/VoltAgent/voltagent/pull/110) [`6180880`](https://github.com/VoltAgent/voltagent/commit/6180880a91ea0bb380dd0595e3c3ed6e5c15bc8e) Thanks [@VenomHare](https://github.com/VenomHare)! - ### Features
-
   - Added multi-modal support for message handling.
 
   ### Improvements
-
   - Improved logic for generating system prompts.
   - Implemented enhanced error handling within the provider.
 
   ### Refactoring
-
   - Moved utility functions to `utils` folder for better code organization.
 
   ### Documentation
-
   - Updated and refined documentation for clarity.
 
   ### Testing
-
   - Added tests for newly implemented logic.
 
 ## 0.1.4

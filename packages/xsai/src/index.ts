@@ -14,6 +14,7 @@ import type {
   StepWithContent,
 } from "@voltagent/core";
 import { createAsyncIterableStream } from "@voltagent/core";
+import type { SetRequired } from "type-fest";
 import type {
   GenerateObjectResult,
   GenerateTextResult,
@@ -21,11 +22,11 @@ import type {
   Message,
   StreamObjectResult,
   StreamTextResult,
-  StreamTextStep,
   TextPart,
   Tool,
 } from "xsai";
 import type { z } from "zod";
+import { createMappedFullStream } from "./utils";
 
 export class XSAIProvider implements LLMProvider<string> {
   private apiKey: string;
@@ -249,7 +250,7 @@ export class XSAIProvider implements LLMProvider<string> {
 
   async streamText(
     options: BaseStreamTextOptions<string>,
-  ): Promise<ProviderTextStreamResponse<StreamTextResult>> {
+  ): Promise<SetRequired<ProviderTextStreamResponse<StreamTextResult>, "fullStream">> {
     const { streamText } = await import("xsai");
     const xsaiMessages = options.messages.map(this.toMessage);
     const xsaiTools = options.tools ? await this.convertTools(options.tools) : undefined;
@@ -271,8 +272,16 @@ export class XSAIProvider implements LLMProvider<string> {
         ? {
             onFinish: async (result) =>
               await options.onFinish?.({
-                text: result?.map((r) => r.choices?.[0]?.message?.content || "").join("") || "",
-                ...result,
+                text: result?.text || "",
+                usage: result?.usage
+                  ? {
+                      promptTokens: result.usage.prompt_tokens,
+                      completionTokens: result.usage.completion_tokens,
+                      totalTokens: result.usage.total_tokens,
+                    }
+                  : undefined,
+                finishReason: result?.finishReason,
+                providerResponse: result,
               }),
           }
         : {}),
@@ -282,6 +291,7 @@ export class XSAIProvider implements LLMProvider<string> {
     return {
       provider: result,
       textStream: createAsyncIterableStream(result.textStream),
+      fullStream: createMappedFullStream(createAsyncIterableStream(result.fullStream)),
     };
   }
 
@@ -352,7 +362,7 @@ export class XSAIProvider implements LLMProvider<string> {
     const xsaiMessages = options.messages.map(this.toMessage);
 
     const onStepFinishWrapper = options.onStepFinish
-      ? async (result: StreamTextStep) => {
+      ? async (result: any) => {
           // For streamObject, we need to wrap text content in a special format
           const handler = this.createStepFinishHandler(async (step) => {
             if (step.type === "text") {

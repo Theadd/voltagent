@@ -1,5 +1,5 @@
 import type { SetRequired } from "type-fest";
-import { devLogger } from "../dev";
+import type { Logger } from "../logger/types";
 import type { PlainObject } from "../types";
 import { isObject } from "./lang";
 
@@ -7,13 +7,16 @@ import { isObject } from "./lang";
  * Deep clone an object using JSON serialization with fallback to shallow clone
  *
  * @param obj - The object to clone
+ * @param logger - Optional logger for warnings
  * @returns A deep copy of the object, or shallow copy if JSON serialization fails
  */
-export function deepClone<T>(obj: T): T {
+export function deepClone<T>(obj: T, logger?: Logger): T {
   try {
     return JSON.parse(JSON.stringify(obj));
   } catch (error) {
-    devLogger.warn("Failed to deep clone object, using shallow clone:", error);
+    if (logger) {
+      logger.warn("Failed to deep clone object, using shallow clone", { error });
+    }
     // Fallback to shallow clone for primitive types and simple objects
     if (obj === null || typeof obj !== "object") {
       return obj;

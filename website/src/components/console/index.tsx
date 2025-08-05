@@ -6,7 +6,6 @@ import { DotPattern } from "../ui/dot-pattern";
 import FrameworkIntegration from "./FrameworkIntegration";
 import { HowToGetStarted } from "./HowToGetStarted";
 import ObservabilityFeatures from "./ObservabilityFeatures";
-import PricingSection from "./PricingSection";
 
 export const Console = () => {
   return (
@@ -50,9 +49,8 @@ export const Console = () => {
                 >
                   LLM Observability
                 </Link>{" "}
-                platform where developers can trace, debug, and optimize AI
-                agents in real-time, no matter if they are built with VoltAgent
-                or another framework.
+                platform where developers can trace, debug, and optimize AI agents in real-time, no
+                matter if they are built with VoltAgent or another framework.
               </p>
 
               <div className="flex flex-row justify-center landing-sm:justify-start gap-3 landing-xs:gap-2 landing-sm:gap-4 mt-4 landing-xs:mt-3 landing-sm:mt-6">
@@ -80,8 +78,6 @@ export const Console = () => {
       <HowToGetStarted />
       {/* Observability Features */}
       <ObservabilityFeatures />
-
-      <PricingSection />
     </section>
   );
 };

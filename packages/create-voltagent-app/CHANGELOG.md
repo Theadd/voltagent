@@ -1,5 +1,89 @@
 # create-voltagent-app
 
+## 0.2.6
+
+### Patch Changes
+
+- [`90a1316`](https://github.com/VoltAgent/voltagent/commit/90a131622a876c0d91e1b9046a5e1fc143fef6b5) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: improve code quality with biome linting and package configuration enhancements
+
+  This update focuses on improving code quality and package configuration across the entire VoltAgent monorepo:
+
+  **Key improvements:**
+  - **Biome Linting**: Fixed numerous linting issues identified by Biome across all packages, ensuring consistent code style and catching potential bugs
+  - **Package Configuration**: Added `publint` script to all packages for strict validation of package.json files to ensure proper publishing configuration
+  - **TypeScript Exports**: Fixed `typesVersions` structure in @voltagent/internal package and removed duplicate entries
+  - **Test Utilities**: Refactored `createTrackedStorage` function in core package by simplifying its API - removed the `testName` parameter for cleaner test setup
+  - **Type Checking**: Enabled `attw` (Are The Types Wrong) checking to ensure TypeScript types are correctly exported
+
+  These changes improve the overall maintainability and reliability of the VoltAgent framework without affecting the public API.
+
+## 0.2.3
+
+### Patch Changes
+
+- [#404](https://github.com/VoltAgent/voltagent/pull/404) [`809bd13`](https://github.com/VoltAgent/voltagent/commit/809bd13c5fce7b2afdb0f0d934cc5a21d3e77726) Thanks [@omeraplak](https://github.com/omeraplak)! - feat: add @voltagent/logger with createPinoLogger to new project templates
+
+  Enhanced the create-voltagent-app templates to include @voltagent/logger by default in new projects. This provides new VoltAgent applications with production-ready logging capabilities out of the box.
+
+  **Changes:**
+  - Added `@voltagent/logger` as a dependency in generated projects
+  - Updated templates to import and use `createPinoLogger` instead of relying on the default ConsoleLogger
+  - New projects now have pretty-formatted, colored logs in development
+  - Automatic environment-based configuration (pretty in dev, JSON in production)
+
+  **Generated Code Example:**
+
+  ```typescript
+  import { createPinoLogger } from "@voltagent/logger";
+
+  const logger = createPinoLogger({
+    level: "info",
+    name: "my-voltagent-app",
+  });
+
+  const voltAgent = new VoltAgent({
+    agents: [agent],
+    logger,
+  });
+  ```
+
+  This ensures new VoltAgent projects start with professional logging capabilities, improving the developer experience and making applications production-ready from day one.
+
+## 0.2.0
+
+### Minor Changes
+
+- [`8b143cb`](https://github.com/VoltAgent/voltagent/commit/8b143cbd6f4349fe62158d7e78a5a239fec7a9e2) Thanks [@omeraplak](https://github.com/omeraplak)! - feat: modernize create-voltagent-app CLI
+  - Add AI provider selection (OpenAI, Anthropic, Google, Groq, Mistral, Ollama)
+  - Add optional API key input with skip option
+  - Automatic .env file generation based on selected provider
+  - Package manager detection - only show installed ones
+  - Auto-install dependencies after project creation
+  - Full Windows support with cross-platform commands
+  - Ollama local LLM support with default configuration
+  - Dynamic template generation based on selected AI provider
+
+### Patch Changes
+
+- [`8b143cb`](https://github.com/VoltAgent/voltagent/commit/8b143cbd6f4349fe62158d7e78a5a239fec7a9e2) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: include create-voltagent-app in build:all script
+
+  The create-voltagent-app package was not being built during GitHub Actions release workflow because it doesn't have the @voltagent/ scope prefix. Added explicit scope to build:all command to ensure the CLI tool is properly built before publishing.
+
+## 0.1.33
+
+### Patch Changes
+
+- [#371](https://github.com/VoltAgent/voltagent/pull/371) [`6ddedc2`](https://github.com/VoltAgent/voltagent/commit/6ddedc2b9be9c3dc4978dc53198a43c2cba74945) Thanks [@omeraplak](https://github.com/omeraplak)! - feat: add comprehensive workflow example to new projects
+
+  This change enhances the `create-voltagent-app` template by including a new, comprehensive workflow example. The goal is to provide new users with a practical, out-of-the-box demonstration of VoltAgent's core workflow capabilities.
+
+  The new template now includes:
+  - A `comprehensive-workflow` that showcases the combined use of `andThen`, `andAgent`, `andAll`, `andRace`, and `andWhen`.
+  - A dedicated `workflows` directory (`src/workflows`) to promote a modular project structure.
+  - The workflow uses a self-contained `sentimentAgent`, separating it from the main project agent to ensure clarity and avoid conflicts.
+
+  This provides a much richer starting point for developers, helping them understand and build their own workflows more effectively.
+
 ## 0.1.31
 
 ### Patch Changes
@@ -15,7 +99,6 @@
   Added comprehensive MCP (Model Context Protocol) Docs Server integration to enable AI assistants in IDEs to access VoltAgent documentation directly. This feature allows developers to ask their AI assistants questions about VoltAgent directly within their development environment.
 
   **New Features:**
-
   - **`@voltagent/docs-mcp`** package: MCP server that provides access to VoltAgent documentation
   - **CLI MCP commands**: Setup, test, status, and remove MCP configurations
     - `volt mcp setup` - Interactive setup for Cursor, Windsurf, or VS Code
@@ -39,7 +122,6 @@
   ```
 
   Once configured, developers can ask their AI assistant questions like:
-
   - "How do I create an agent in VoltAgent?"
   - "Is there a VoltAgent example with Next.js?"
   - "How do I use voice features?"
@@ -104,6 +186,5 @@
 ### Patch Changes
 
 - [#33](https://github.com/VoltAgent/voltagent/pull/33) [`3ef2eaa`](https://github.com/VoltAgent/voltagent/commit/3ef2eaa9661e8ecfebf17af56b09af41285d0ca9) Thanks [@kwaa](https://github.com/kwaa)! - Update package.json files:
-
   - Remove `src` directory from the `files` array.
   - Add explicit `exports` field for better module resolution.

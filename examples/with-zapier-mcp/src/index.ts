@@ -1,6 +1,7 @@
-import { VoltAgent, Agent, MCPConfiguration } from "@voltagent/core";
-import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
+import { Agent, MCPConfiguration, VoltAgent } from "@voltagent/core";
+import { createPinoLogger } from "@voltagent/logger";
+import { VercelAIProvider } from "@voltagent/vercel-ai";
 
 const bedrock = createAmazonBedrock({
   region: "us-east-1",
@@ -15,7 +16,7 @@ async function main() {
       servers: {
         zapier: {
           type: "http",
-          url: process.env.ZAPIER_MCP_URL!,
+          url: process.env.ZAPIER_MCP_URL || "",
         },
       },
     });
@@ -32,10 +33,17 @@ async function main() {
       markdown: true,
     });
 
+    // Create logger
+    const logger = createPinoLogger({
+      name: "with-zapier-mcp",
+      level: "info",
+    });
+
     new VoltAgent({
       agents: {
         agent,
       },
+      logger,
     });
   } catch (error) {
     console.error("Failed to initialize VoltAgent:", error);

@@ -1,6 +1,7 @@
-import { VoltAgent, Agent, createTool, createHooks } from "@voltagent/core";
-import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { openai } from "@ai-sdk/openai";
+import { Agent, VoltAgent, createHooks, createTool } from "@voltagent/core";
+import { createPinoLogger } from "@voltagent/logger";
+import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { fetchRepoContributorsTool } from "./tools";
 import { fetchRepoStarsTool } from "./tools";
 
@@ -46,8 +47,16 @@ Example input: https://github.com/vercel/ai-sdk or vercel/ai-sdk
 });
 
 // Initialize the VoltAgent with the agent hierarchy
+
+// Create logger
+const logger = createPinoLogger({
+  name: "github-repo-analyzer",
+  level: "info",
+});
+
 new VoltAgent({
   agents: {
     supervisorAgent,
   },
+  logger,
 });

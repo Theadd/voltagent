@@ -7,6 +7,26 @@ import { AgentEventEmitter } from "./index";
 // Mock AgentRegistry
 vi.mock("../server/registry");
 
+// Mock logger
+vi.mock("../logger", () => ({
+  LoggerProxy: vi.fn().mockImplementation(() => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    child: vi.fn(() => ({
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+    })),
+  })),
+}));
+
 describe("AgentEventEmitter", () => {
   let eventEmitter: AgentEventEmitter;
 
@@ -99,7 +119,15 @@ describe("AgentEventEmitter", () => {
     // Mock agent with history and historyManager
     const mockAgent = {
       name: "TestAgent",
-      getHistory: vi.fn().mockResolvedValue([historyEntry as AgentHistoryEntry]),
+      getHistory: vi.fn().mockResolvedValue({
+        entries: [historyEntry as AgentHistoryEntry],
+        pagination: {
+          page: 0,
+          limit: 20,
+          total: 1,
+          totalPages: 1,
+        },
+      }),
       id: "test-agent",
       getHistoryManager: vi.fn().mockReturnValue(mockHistoryManager),
     };

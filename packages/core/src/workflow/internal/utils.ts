@@ -1,20 +1,25 @@
 import type { DangerouslyAllowAny } from "@voltagent/internal/types";
-import { v4 as uuidv4 } from "uuid";
+import type { WorkflowExecutionContext } from "../context";
 import type { WorkflowState } from "./state";
 import type {
-  InternalBaseWorkflowStep,
+  InternalExtractWorkflowInputData,
   InternalWorkflowStateParam,
   InternalWorkflowStepConfig,
+  WorkflowExecuteContext,
 } from "./types";
 
 /**
  * Convert a workflow state to a parameter for a step or hook
  * @param state - The workflow state
+ * @param executionContext - The workflow execution context for event tracking
+ * @param signal - Optional AbortSignal for step suspension
  * @returns The parameter for the step or hook
  */
 export function convertWorkflowStateToParam<INPUT>(
   state: WorkflowState<INPUT, DangerouslyAllowAny>,
-): InternalWorkflowStateParam<INPUT> {
+  executionContext?: WorkflowExecutionContext,
+  signal?: AbortSignal,
+): InternalWorkflowStateParam<INPUT> & { workflowContext?: WorkflowExecutionContext } {
   return {
     executionId: state.executionId,
     conversationId: state.conversationId,
@@ -26,6 +31,8 @@ export function convertWorkflowStateToParam<INPUT>(
     input: state.input,
     status: state.status,
     error: state.error,
+    workflowContext: executionContext,
+    signal,
   };
 }
 
@@ -37,8 +44,32 @@ export function convertWorkflowStateToParam<INPUT>(
 export function defaultStepConfig<CONFIG extends InternalWorkflowStepConfig>(config: CONFIG) {
   return {
     ...config,
-    id: config.id ?? uuidv4(),
-    name: config.name ?? "No name provided",
-    purpose: config.purpose ?? "No purpose provided",
+    name: config.name ?? null,
+    purpose: config.purpose ?? null,
+  };
+}
+
+/**
+ * Create a context object for step execution
+ * @param data - The step input data
+ * @param state - The workflow state
+ * @param executionContext - The workflow execution context
+ * @param suspendFn - The suspend function for the step
+ * @returns The execution context for the step
+ */
+export function createStepExecutionContext<INPUT, DATA, SUSPEND_DATA, RESUME_DATA>(
+  data: InternalExtractWorkflowInputData<DATA>,
+  state: InternalWorkflowStateParam<INPUT>,
+  executionContext: WorkflowExecutionContext,
+  suspendFn: (reason?: string, suspendData?: SUSPEND_DATA) => Promise<never>,
+  resumeData?: RESUME_DATA,
+): WorkflowExecuteContext<INPUT, DATA, SUSPEND_DATA, RESUME_DATA> {
+  return {
+    data,
+    state,
+    getStepData: (stepId: string) => executionContext?.stepData.get(stepId),
+    suspend: suspendFn,
+    resumeData,
+    logger: executionContext.logger,
   };
 }

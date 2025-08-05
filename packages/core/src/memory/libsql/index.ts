@@ -3,10 +3,13 @@ import fs from "node:fs";
 import { join } from "node:path";
 import type { Client, Row } from "@libsql/client";
 import { createClient } from "@libsql/client";
-import { devLogger } from "@voltagent/internal/dev";
+import type { Logger } from "@voltagent/internal";
 import type { BaseMessage } from "../../agent/providers/base/types";
 import type { NewTimelineEvent } from "../../events/types";
+import { LoggerProxy } from "../../logger";
 import { safeJsonParse } from "../../utils";
+import { addSuspendedStatusMigration } from "../migrations/add-suspended-status";
+import { createWorkflowTables } from "../migrations/workflow-tables";
 import type {
   Conversation,
   ConversationQueryOptions,
@@ -16,6 +19,7 @@ import type {
   MemoryOptions,
   MessageFilterOptions,
 } from "../types";
+import { LibSQLWorkflowExtension } from "./workflow-extension";
 
 /**
  * LibSQL Storage for VoltAgent
@@ -26,7 +30,7 @@ import type {
  * - Query builder pattern for flexible data retrieval
  * - Pagination support
  *
- * @see {@link https://voltagent.ai/docs/agents/memory/libsql | LibSQL Storage Documentation}
+ * @see {@link https://voltagent.dev/docs/agents/memory/libsql | LibSQL Storage Documentation}
  * Function to add a delay between 0-0 seconds for debugging
  */
 async function debugDelay(): Promise<void> {
@@ -72,11 +76,24 @@ export interface LibSQLStorageOptions extends MemoryOptions {
    * @default 100
    */
   storageLimit?: number;
+
+  /**
+   * Number of retry attempts for database operations when encountering busy/locked errors
+   * @default 3
+   */
+  retryAttempts?: number;
+
+  /**
+   * Base delay in milliseconds before retrying a failed operation
+   * Uses a jittered exponential backoff strategy for better load distribution
+   * @default 50
+   */
+  baseDelayMs?: number;
 }
 
 /**
- * A LibSQL storage implementation of the Memory interface
- * Uses libsql/Turso to store and retrieve conversation history
+ * A LibSQL storage implementation of the Memory and WorkflowMemory interfaces
+ * Uses libsql/Turso to store and retrieve conversation history and workflow data
  *
  * This implementation automatically handles both:
  * - Remote Turso databases (with libsql:// URLs)
@@ -86,18 +103,28 @@ export class LibSQLStorage implements Memory {
   private client: Client;
   private options: LibSQLStorageOptions;
   private initialized: Promise<void>;
+  private workflowExtension: LibSQLWorkflowExtension;
+  private logger: Logger;
+  private retryAttempts: number;
+  private baseDelayMs: number;
 
   /**
    * Create a new LibSQL storage
    * @param options Configuration options
    */
   constructor(options: LibSQLStorageOptions) {
+    this.logger = new LoggerProxy({ component: "libsql-storage" });
+    this.retryAttempts = options.retryAttempts ?? 3;
+    this.baseDelayMs = options.baseDelayMs ?? 50;
+
     this.options = {
       storageLimit: options.storageLimit || 100,
       tablePrefix: options.tablePrefix || "voltagent_memory",
       debug: options.debug || false,
       url: this.normalizeUrl(options.url),
       authToken: options.authToken,
+      retryAttempts: this.retryAttempts,
+      baseDelayMs: this.baseDelayMs,
     };
 
     // Initialize the LibSQL client
@@ -107,6 +134,9 @@ export class LibSQLStorage implements Memory {
     });
 
     this.debug("LibSQL storage provider initialized with options", this.options);
+
+    // Initialize workflow extension
+    this.workflowExtension = new LibSQLWorkflowExtension(this.client, this.options.tablePrefix);
 
     // Initialize the database tables
     this.initialized = this.initializeDatabase();
@@ -154,7 +184,92 @@ export class LibSQLStorage implements Memory {
    */
   private debug(message: string, data?: unknown): void {
     if (this.options?.debug) {
-      devLogger.info(`[LibSQLStorage] ${message}`, data || "");
+      this.logger.debug(`${message}`, data || "");
+    }
+  }
+
+  /**
+   * Calculate delay with jitter for better load distribution
+   * @param attempt Current retry attempt number
+   * @returns Delay in milliseconds
+   */
+  private calculateRetryDelay(attempt: number): number {
+    // Exponential backoff: baseDelay * 2^(attempt-1)
+    const exponentialDelay = this.baseDelayMs * 2 ** (attempt - 1);
+
+    // Add 20-40% jitter to prevent thundering herd
+    const jitterFactor = 0.2 + Math.random() * 0.2;
+    const delayWithJitter = exponentialDelay * (1 + jitterFactor);
+
+    // Cap at 2 seconds max
+    return Math.min(delayWithJitter, 2000);
+  }
+
+  /**
+   * Execute a database operation with retry strategy
+   * Implements jittered exponential backoff
+   * @param operationFn The operation function to execute
+   * @param operationName Operation name for logging
+   * @returns The result of the operation
+   */
+  private async executeWithRetryStrategy<T>(
+    operationFn: () => Promise<T>,
+    operationName: string,
+  ): Promise<T> {
+    let attempt = 0;
+
+    while (attempt < this.retryAttempts) {
+      attempt++;
+
+      try {
+        return await operationFn();
+      } catch (error: any) {
+        const isBusyError =
+          error.message &&
+          (error.message.includes("SQLITE_BUSY") ||
+            error.message.includes("database is locked") ||
+            error.code === "SQLITE_BUSY");
+
+        if (!isBusyError || attempt >= this.retryAttempts) {
+          this.debug(`Operation failed: ${operationName}`, {
+            attempt,
+            error: error.message,
+          });
+          throw error;
+        }
+
+        // Calculate delay with jitter
+        const delay = this.calculateRetryDelay(attempt);
+
+        this.debug(`Retrying ${operationName}`, {
+          attempt,
+          remainingAttempts: this.retryAttempts - attempt,
+          delay,
+        });
+
+        // Wait before retry
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    // Should never reach here
+    throw new Error(`Max retry attempts (${this.retryAttempts}) exceeded for ${operationName}`);
+  }
+
+  /**
+   * Initialize workflow tables
+   */
+  private async initializeWorkflowTables(): Promise<void> {
+    try {
+      await createWorkflowTables(this.client, this.options.tablePrefix);
+      this.debug("Workflow tables initialized successfully");
+
+      // Run migrations
+      await addSuspendedStatusMigration(this.client, this.options.tablePrefix);
+      this.debug("Workflow migrations applied successfully");
+    } catch (error) {
+      this.debug("Error initializing workflow tables:", error);
+      // Don't throw error to avoid breaking existing functionality
     }
   }
 
@@ -163,6 +278,23 @@ export class LibSQLStorage implements Memory {
    * @returns Promise that resolves when initialization is complete
    */
   private async initializeDatabase(): Promise<void> {
+    // Set PRAGMA settings for better concurrency, especially for file-based databases
+    if (this.options.url.startsWith("file:") || this.options.url.includes(":memory:")) {
+      try {
+        await this.client.execute("PRAGMA journal_mode=WAL;");
+        this.debug("PRAGMA journal_mode=WAL set.");
+      } catch (err) {
+        this.debug("Failed to set PRAGMA journal_mode=WAL.", err);
+      }
+
+      try {
+        await this.client.execute("PRAGMA busy_timeout = 5000;"); // 5 seconds
+        this.debug("PRAGMA busy_timeout=5000 set.");
+      } catch (err) {
+        this.debug("Failed to set PRAGMA busy_timeout.", err);
+      }
+    }
+
     // Create conversations table if it doesn't exist
     const conversationsTableName = `${this.options.tablePrefix}_conversations`;
 
@@ -204,7 +336,9 @@ export class LibSQLStorage implements Memory {
           input TEXT,
           output TEXT,
           usage TEXT,
-          metadata TEXT
+          metadata TEXT,
+          userId TEXT,
+          conversationId TEXT
         )
       `);
 
@@ -278,6 +412,9 @@ export class LibSQLStorage implements Memory {
         ON ${historyStepsTableName}(history_id)
       `);
 
+    // Initialize workflow tables
+    await this.initializeWorkflowTables();
+
     // Create indexes for agent_id for more efficient querying
     await this.client.execute(`
         CREATE INDEX IF NOT EXISTS idx_${historyTableName}_agent_id 
@@ -331,12 +468,12 @@ export class LibSQLStorage implements Memory {
 
       if (migrationResult.success) {
         if ((migrationResult.migratedCount || 0) > 0) {
-          devLogger.info(
+          this.logger.info(
             `${migrationResult.migratedCount} conversation records successfully migrated`,
           );
         }
       } else {
-        devLogger.error("Conversation migration error:", migrationResult.error);
+        this.logger.error("Conversation migration error:", migrationResult.error);
       }
     } catch (error) {
       this.debug("Error migrating conversation schema:", error);
@@ -347,7 +484,7 @@ export class LibSQLStorage implements Memory {
       const migrationResult = await this.migrateAgentHistorySchema();
 
       if (!migrationResult.success) {
-        devLogger.error("Agent history schema migration error:", migrationResult.error);
+        this.logger.error("Agent history schema migration error:", migrationResult.error);
       }
     } catch (error) {
       this.debug("Error migrating agent history schema:", error);
@@ -360,16 +497,16 @@ export class LibSQLStorage implements Memory {
 
       if (result.success) {
         if ((result.migratedCount || 0) > 0) {
-          devLogger.info(`${result.migratedCount} records successfully migrated`);
+          this.logger.info(`${result.migratedCount} records successfully migrated`);
         }
       } else {
-        devLogger.error("Migration error:", result.error);
+        this.logger.error("Migration error:", result.error);
 
         // Restore from backup in case of error
         const restoreResult = await this.migrateAgentHistoryData({});
 
         if (restoreResult.success) {
-          devLogger.info("Successfully restored from backup");
+          this.logger.info("Successfully restored from backup");
         }
       }
     } catch (error) {
@@ -400,7 +537,15 @@ export class LibSQLStorage implements Memory {
     // Add delay for debugging
     await debugDelay();
 
-    const { userId = "default", conversationId = "default", limit, before, after, role } = options;
+    const {
+      userId = "default",
+      conversationId = "default",
+      limit,
+      before,
+      after,
+      role,
+      types,
+    } = options;
 
     const messagesTableName = `${this.options.tablePrefix}_messages`;
     const conversationsTableName = `${this.options.tablePrefix}_conversations`;
@@ -443,16 +588,25 @@ export class LibSQLStorage implements Memory {
         args.push(role);
       }
 
+      // Add types filter
+      if (types) {
+        const placeholders = types.map(() => "?").join(", ");
+        conditions.push(`m.type IN (${placeholders})`);
+        args.push(...types);
+      }
+
       // Add WHERE clause if we have conditions
       if (conditions.length > 0) {
         sql += ` WHERE ${conditions.join(" AND ")}`;
       }
 
       // Add ordering and limit
-      sql += " ORDER BY m.created_at ASC";
+      // When limit is specified, we need to get the most recent messages
       if (limit && limit > 0) {
-        sql += " LIMIT ?";
+        sql += " ORDER BY m.created_at DESC LIMIT ?";
         args.push(limit);
+      } else {
+        sql += " ORDER BY m.created_at ASC";
       }
 
       const result = await this.client.execute({
@@ -460,13 +614,21 @@ export class LibSQLStorage implements Memory {
         args,
       });
 
-      return result.rows.map((row) => ({
+      // Map the results
+      const messages = result.rows.map((row) => ({
         id: row.message_id as string,
         role: row.role as BaseMessage["role"],
         content: row.content as string,
         type: row.type as "text" | "tool-call" | "tool-result",
         createdAt: row.created_at as string,
       }));
+
+      // If we used DESC order with limit, reverse to get chronological order
+      if (limit && limit > 0) {
+        return messages.reverse();
+      }
+
+      return messages;
     } catch (error) {
       this.debug("Error getting messages:", error);
       throw new Error("Failed to get messages from LibSQL database");
@@ -488,7 +650,8 @@ export class LibSQLStorage implements Memory {
 
     const tableName = `${this.options.tablePrefix}_messages`;
     const contentString = JSON.stringify(message.content);
-    try {
+
+    await this.executeWithRetryStrategy(async () => {
       await this.client.execute({
         sql: `INSERT INTO ${tableName} (conversation_id, message_id, role, content, type, created_at)
               VALUES (?, ?, ?, ?, ?, ?)`,
@@ -511,10 +674,7 @@ export class LibSQLStorage implements Memory {
         this.debug("Error pruning old messages:", pruneError);
         // Don't throw error for pruning failure
       }
-    } catch (error) {
-      this.debug("Error adding message:", error);
-      throw new Error("Failed to add message to LibSQL database");
-    }
+    }, `addMessage[${message.id}]`);
   }
 
   /**
@@ -604,7 +764,14 @@ export class LibSQLStorage implements Memory {
   /**
    * Close the database connection
    */
-  close(): void {
+  async close(): Promise<void> {
+    try {
+      // Wait for initialization to complete before closing
+      await this.initialized;
+    } catch {
+      // Ignore initialization errors when closing
+    }
+
     this.client.close();
   }
 
@@ -927,7 +1094,7 @@ export class LibSQLStorage implements Memory {
 
     const tableName = `${this.options.tablePrefix}_conversations`;
 
-    try {
+    return await this.executeWithRetryStrategy(async () => {
       await this.client.execute({
         sql: `INSERT INTO ${tableName} (id, resource_id, user_id, title, metadata, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -951,10 +1118,7 @@ export class LibSQLStorage implements Memory {
         createdAt: now,
         updatedAt: now,
       };
-    } catch (error) {
-      this.debug("Error creating conversation:", error);
-      throw new Error("Failed to create conversation in LibSQL database");
-    }
+    }, `createConversation[${conversation.id}]`);
   }
 
   async getConversation(id: string): Promise<Conversation | null> {
@@ -1080,7 +1244,7 @@ export class LibSQLStorage implements Memory {
    *
    * @param options Query options for filtering and pagination
    * @returns Promise that resolves to an array of conversations matching the criteria
-   * @see {@link https://voltagent.ai/docs/agents/memory/libsql#querying-conversations | Querying Conversations}
+   * @see {@link https://voltagent.dev/docs/agents/memory/libsql#querying-conversations | Querying Conversations}
    */
   public async queryConversations(options: ConversationQueryOptions): Promise<Conversation[]> {
     await this.initialized;
@@ -1151,7 +1315,7 @@ export class LibSQLStorage implements Memory {
    * @param conversationId The unique identifier of the conversation to retrieve messages from
    * @param options Optional pagination and filtering options
    * @returns Promise that resolves to an array of messages in chronological order (oldest first)
-   * @see {@link https://voltagent.ai/docs/agents/memory/libsql#conversation-messages | Getting Conversation Messages}
+   * @see {@link https://voltagent.dev/docs/agents/memory/libsql#conversation-messages | Getting Conversation Messages}
    */
   public async getConversationMessages(
     conversationId: string,
@@ -1277,21 +1441,41 @@ export class LibSQLStorage implements Memory {
   }
 
   /**
-   * Get all history entries for an agent
+   * Get all history entries for an agent with pagination
    * @param agentId Agent ID
-   * @returns Array of all history entries for the agent
+   * @param page Page number (0-based)
+   * @param limit Number of entries per page
+   * @returns Object with entries array and total count
    */
-  async getAllHistoryEntriesByAgent(agentId: string): Promise<any[]> {
+  async getAllHistoryEntriesByAgent(
+    agentId: string,
+    page: number,
+    limit: number,
+  ): Promise<{
+    entries: any[];
+    total: number;
+  }> {
     await this.initialized;
 
     try {
       const tableName = `${this.options.tablePrefix}_agent_history`;
+      const offset = page * limit;
 
-      // Get all entries for the specified agent ID using the new schema
+      // Get total count
+      const countResult = await this.client.execute({
+        sql: `SELECT COUNT(*) as total FROM ${tableName} WHERE agent_id = ?`,
+        args: [agentId],
+      });
+
+      const total = Number(countResult.rows[0].total);
+
+      // Get paginated entries for the specified agent ID using the new schema
       const result = await this.client.execute({
         sql: `SELECT id, agent_id, timestamp, status, input, output, usage, metadata, userId, conversationId 
-					FROM ${tableName} WHERE agent_id = ?`,
-        args: [agentId],
+					FROM ${tableName} WHERE agent_id = ?
+					ORDER BY timestamp DESC
+					LIMIT ? OFFSET ?`,
+        args: [agentId, limit, offset],
       });
 
       // Construct entry objects from rows
@@ -1383,11 +1567,17 @@ export class LibSQLStorage implements Memory {
         }),
       );
 
-      // Return completed entries
-      return completeEntries;
+      // Return completed entries with total
+      return {
+        entries: completeEntries,
+        total,
+      };
     } catch (error) {
       this.debug(`Error getting history entries for agent ${agentId}`, error);
-      return [];
+      return {
+        entries: [],
+        total: 0,
+      };
     }
   }
 
@@ -2645,6 +2835,16 @@ export class LibSQLStorage implements Memory {
       const hasUserIdColumn = tableInfo.rows.some((row) => row.name === "userId");
       const hasConversationIdColumn = tableInfo.rows.some((row) => row.name === "conversationId");
 
+      // If both columns already exist, skip migration
+      if (hasUserIdColumn && hasConversationIdColumn) {
+        this.debug("Both userId and conversationId columns already exist, skipping migration");
+
+        // Set migration flag
+        await this.setMigrationFlag("agent_history_schema_migration", 0);
+
+        return { success: true };
+      }
+
       // Add userId column if it doesn't exist
       if (!hasUserIdColumn) {
         await this.client.execute(`ALTER TABLE ${historyTableName} ADD COLUMN userId TEXT`);
@@ -2685,5 +2885,110 @@ export class LibSQLStorage implements Memory {
         error: error as Error,
       };
     }
+  }
+
+  // ===== WorkflowMemory Interface Implementation =====
+  // Delegate all workflow operations to the workflow extension
+
+  async storeWorkflowHistory(entry: any): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.storeWorkflowHistory(entry);
+  }
+
+  async getWorkflowHistory(id: string): Promise<any> {
+    await this.initialized;
+    return this.workflowExtension.getWorkflowHistory(id);
+  }
+
+  async getWorkflowHistoryByWorkflowId(workflowId: string): Promise<any[]> {
+    await this.initialized;
+    return this.workflowExtension.getWorkflowHistoryByWorkflowId(workflowId);
+  }
+
+  async updateWorkflowHistory(id: string, updates: any): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.updateWorkflowHistory(id, updates);
+  }
+
+  async deleteWorkflowHistory(id: string): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.deleteWorkflowHistory(id);
+  }
+
+  async storeWorkflowStep(step: any): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.storeWorkflowStep(step);
+  }
+
+  async getWorkflowStep(id: string): Promise<any> {
+    await this.initialized;
+    return this.workflowExtension.getWorkflowStep(id);
+  }
+
+  async getWorkflowSteps(workflowHistoryId: string): Promise<any[]> {
+    await this.initialized;
+    return this.workflowExtension.getWorkflowSteps(workflowHistoryId);
+  }
+
+  async updateWorkflowStep(id: string, updates: any): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.updateWorkflowStep(id, updates);
+  }
+
+  async deleteWorkflowStep(id: string): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.deleteWorkflowStep(id);
+  }
+
+  async storeWorkflowTimelineEvent(event: any): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.storeWorkflowTimelineEvent(event);
+  }
+
+  async getWorkflowTimelineEvent(id: string): Promise<any> {
+    await this.initialized;
+    return this.workflowExtension.getWorkflowTimelineEvent(id);
+  }
+
+  async getWorkflowTimelineEvents(workflowHistoryId: string): Promise<any[]> {
+    await this.initialized;
+    return this.workflowExtension.getWorkflowTimelineEvents(workflowHistoryId);
+  }
+
+  async deleteWorkflowTimelineEvent(id: string): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.deleteWorkflowTimelineEvent(id);
+  }
+
+  async getAllWorkflowIds(): Promise<string[]> {
+    await this.initialized;
+    return this.workflowExtension.getAllWorkflowIds();
+  }
+
+  async getWorkflowStats(workflowId: string): Promise<any> {
+    await this.initialized;
+    return this.workflowExtension.getWorkflowStats(workflowId);
+  }
+
+  async getWorkflowHistoryWithStepsAndEvents(id: string): Promise<any> {
+    await this.initialized;
+    return this.workflowExtension.getWorkflowHistoryWithStepsAndEvents(id);
+  }
+
+  async deleteWorkflowHistoryWithRelated(id: string): Promise<void> {
+    await this.initialized;
+    return this.workflowExtension.deleteWorkflowHistoryWithRelated(id);
+  }
+
+  async cleanupOldWorkflowHistories(workflowId: string, maxEntries: number): Promise<number> {
+    await this.initialized;
+    return this.workflowExtension.cleanupOldWorkflowHistories(workflowId, maxEntries);
+  }
+
+  /**
+   * Get the workflow extension for advanced workflow operations
+   */
+  public getWorkflowExtension(): LibSQLWorkflowExtension {
+    return this.workflowExtension;
   }
 }

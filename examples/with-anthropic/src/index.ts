@@ -1,5 +1,6 @@
-import { VoltAgent, Agent, createTool } from "@voltagent/core";
 import { AnthropicProvider } from "@voltagent/anthropic-ai";
+import { Agent, VoltAgent, createTool } from "@voltagent/core";
+import { createPinoLogger } from "@voltagent/logger";
 import { z } from "zod";
 
 const weatherTool = createTool({
@@ -24,8 +25,15 @@ const agent = new Agent({
   tools: [weatherTool],
 });
 
+// Create logger
+const logger = createPinoLogger({
+  name: "with-anthropic",
+  level: "info",
+});
+
 new VoltAgent({
   agents: {
     agent,
   },
+  logger,
 });
