@@ -1,5 +1,33 @@
 # @voltagent/xsai
 
+## 0.3.4
+
+### Patch Changes
+
+- [#462](https://github.com/VoltAgent/voltagent/pull/462) [`23ecea4`](https://github.com/VoltAgent/voltagent/commit/23ecea421b8c699f5c395dc8aed687f94d558b6c) Thanks [@omeraplak](https://github.com/omeraplak)! - Update Zod to v3.25.0 for compatibility with Vercel AI@5
+  - Updated Zod dependency to ^3.25.0 across all packages
+  - Maintained compatibility with zod-from-json-schema@0.0.5
+  - Fixed TypeScript declaration build hanging issue
+  - Resolved circular dependency issues in the build process
+
+- Updated dependencies [[`23ecea4`](https://github.com/VoltAgent/voltagent/commit/23ecea421b8c699f5c395dc8aed687f94d558b6c), [`23ecea4`](https://github.com/VoltAgent/voltagent/commit/23ecea421b8c699f5c395dc8aed687f94d558b6c)]:
+  - @voltagent/core@0.1.84
+
+## 0.3.3
+
+### Patch Changes
+
+- [#494](https://github.com/VoltAgent/voltagent/pull/494) [`4459ae2`](https://github.com/VoltAgent/voltagent/commit/4459ae24a7c8b4ed3031f5a81ce7835e90fa6ade) Thanks [@kwaa](https://github.com/kwaa)! - fix(xsai): bump to v0.4.0-beta.1, support file & reasoning
+
+## 0.3.2
+
+### Patch Changes
+
+- [`4f4ffc2`](https://github.com/VoltAgent/voltagent/commit/4f4ffc23eaea36675e66eb8a17d275fe9f32a671) Thanks [@omeraplak](https://github.com/omeraplak)! - feat: add fullStream support
+
+- Updated dependencies [[`760a294`](https://github.com/VoltAgent/voltagent/commit/760a294e4d68742d8701d54dc1c541c87959e5d8), [`760a294`](https://github.com/VoltAgent/voltagent/commit/760a294e4d68742d8701d54dc1c541c87959e5d8), [`980d037`](https://github.com/VoltAgent/voltagent/commit/980d037ce535bcc85cc7df3f64354c823453a147)]:
+  - @voltagent/core@0.1.74
+
 ## 0.3.1
 
 ### Patch Changes

@@ -28,6 +28,7 @@ const sidebars: SidebarsConfig = {
             rel: "noreferrer",
           },
         },
+        "getting-started/providers-models",
       ],
     },
     {
@@ -45,6 +46,7 @@ const sidebars: SidebarsConfig = {
         "agents/voice",
         "agents/context",
         "agents/dynamic-agents",
+        "agents/cancellation",
       ],
     },
     {
@@ -54,6 +56,7 @@ const sidebars: SidebarsConfig = {
         "workflows/overview",
         "workflows/suspend-resume",
         "workflows/execute-api",
+        "workflows/streaming",
         "workflows/hooks",
         "workflows/schemas",
         "workflows/steps/and-then",
@@ -88,7 +91,7 @@ const sidebars: SidebarsConfig = {
     {
       type: "category",
       label: "Utils",
-      items: ["utils/create-prompt"],
+      items: ["utils/create-prompt", "utils/message-helpers"],
     },
     {
       type: "category",
@@ -112,6 +115,11 @@ const sidebars: SidebarsConfig = {
         "observability/logging",
         "observability/langfuse",
       ],
+    },
+    {
+      type: "category",
+      label: "Evals",
+      items: ["evals/overview", "evals/quick-start"],
     },
     {
       type: "category",

@@ -11,7 +11,7 @@ import type {
 import type { Memory, MemoryOptions } from "../memory/types";
 import type { VoltAgentExporter } from "../telemetry/exporter";
 import type { Tool, Toolkit } from "../tool";
-import type { StreamEvent } from "../utils/streams";
+import type { StreamEvent, StreamEventType } from "../utils/streams";
 import type { AgentHistoryEntry } from "./history";
 import type { LLMProvider } from "./providers";
 import type { BaseTool } from "./providers";
@@ -88,6 +88,24 @@ export type ProviderOptions = {
 /**
  * Configuration for supervisor agents that have subagents
  */
+/**
+ * Configuration for forwarding events from subagents to the parent agent's stream
+ */
+export type FullStreamEventForwardingConfig = {
+  /**
+   * Array of event types to forward from subagents
+   * Uses StreamEventType which includes: 'text-delta', 'reasoning', 'source', 'tool-call', 'tool-result', 'finish', 'error'
+   * @default ['tool-call', 'tool-result']
+   * @example ['tool-call', 'tool-result', 'text-delta', 'reasoning', 'source']
+   */
+  types?: StreamEventType[];
+  /**
+   * Whether to add the subagent name as a prefix to tool names in forwarded events
+   * @default true
+   */
+  addSubAgentPrefix?: boolean;
+};
+
 export type SupervisorConfig = {
   /**
    * Complete custom system message for the supervisor agent
@@ -106,6 +124,30 @@ export type SupervisorConfig = {
    * Additional custom guidelines for the supervisor agent
    */
   customGuidelines?: string[];
+
+  /**
+   * Configuration for forwarding events from subagents to the parent agent's full stream
+   * Controls which event types are forwarded and how they are formatted
+   * @default { types: ['tool-call', 'tool-result'], addSubAgentPrefix: true }
+   */
+  fullStreamEventForwarding?: FullStreamEventForwardingConfig;
+
+  /**
+   * Whether to throw an exception when a subagent stream encounters an error
+   * If true, stream errors will cause the handoff to throw an exception
+   * If false, errors will be captured and returned in the result
+   * @default false
+   */
+  throwOnStreamError?: boolean;
+
+  /**
+   * Whether to include error message in the result when no text content was produced
+   * Only applies when throwOnStreamError is false
+   * If true, the error message will be included in the result field
+   * If false, the result will be empty but status will still be 'error'
+   * @default true
+   */
+  includeErrorInEmptyResponse?: boolean;
 };
 
 /**
@@ -323,7 +365,13 @@ export interface CommonGenerateOptions {
   // Maximum number of steps for this specific request (overrides agent's maxSteps)
   maxSteps?: number;
 
-  // Signal for aborting the operation
+  // AbortController for cancelling the operation and accessing the signal
+  abortController?: AbortController;
+
+  /**
+   * @deprecated Use abortController instead. This field will be removed in a future version.
+   * Signal for aborting the operation
+   */
   signal?: AbortSignal;
 
   // Current history entry ID for parent context in tool execution
@@ -547,6 +595,9 @@ export type OperationContext = {
   /** User-managed context map for this specific operation */
   readonly userContext: Map<string | symbol, any>;
 
+  /** System-managed context map for internal operation tracking */
+  readonly systemContext: Map<string | symbol, any>;
+
   /** The history entry associated with this operation */
   historyEntry: AgentHistoryEntry;
 
@@ -571,8 +622,17 @@ export type OperationContext = {
   /** Conversation steps for building full message history including tool calls/results */
   conversationSteps?: StepWithContent[];
 
-  /** AbortSignal for cancelling the operation */
+  /** AbortController for cancelling the operation and accessing the signal */
+  abortController?: AbortController;
+
+  /**
+   * @deprecated Use abortController.signal instead. This field will be removed in a future version.
+   * AbortSignal for cancelling the operation
+   */
   signal?: AbortSignal;
+
+  /** Cancellation error to be thrown when operation is aborted */
+  cancellationError?: AbortError;
 };
 
 /**
@@ -628,6 +688,29 @@ export interface VoltAgentError {
 
   /** If the error occurred during tool execution, this field contains the relevant details. Otherwise, it's undefined. */
   toolError?: ToolErrorInfo;
+}
+
+/**
+ * Error thrown when an operation is aborted via AbortController
+ */
+export interface AbortError extends Error {
+  name: "AbortError";
+  /** The reason passed to abort() method */
+  reason?: unknown;
+}
+
+/**
+ * Type guard to check if an error is an AbortError
+ */
+export function isAbortError(error: unknown): error is AbortError {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+/**
+ * Type guard to check if an error is a VoltAgentError
+ */
+export function isVoltAgentError(error: unknown): error is VoltAgentError {
+  return error !== null && typeof error === "object" && "message" in error && !isAbortError(error);
 }
 
 /**

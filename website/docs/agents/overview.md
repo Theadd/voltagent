@@ -250,33 +250,85 @@ For providers that don't support these properties, you'll need to collect the va
 
 :::
 
-:::tip SubAgent Event Filtering
+### SubAgent Event Filtering
 
-When using `fullStream` with sub-agents, all sub-agent events are automatically forwarded to the parent stream with `subAgentId` and `subAgentName` metadata. You can filter these events on the client side for different UI experiences:
+When using `fullStream` with sub-agents, by default only `tool-call` and `tool-result` events are forwarded from sub-agents to the parent stream. This keeps the stream focused on meaningful actions while reducing noise.
+
+#### Default Behavior
 
 ```ts
-const response = await supervisorAgent.streamText("Write a story and format it");
+// By default, only tool-call and tool-result events are forwarded
+const supervisorAgent = new Agent({
+  name: "Supervisor",
+  instructions: "You coordinate between agents",
+  llm: provider,
+  subAgents: [writerAgent, editorAgent],
+  // No configuration needed - defaults to ['tool-call', 'tool-result']
+});
 
+const response = await supervisorAgent.streamText("Write and edit a story");
+
+if (response.fullStream) {
+  for await (const chunk of response.fullStream) {
+    // You'll only see tool events from sub-agents by default
+    if (chunk.subAgentId && chunk.subAgentName) {
+      console.log(`[${chunk.subAgentName}] Tool: ${chunk.toolName}`);
+    }
+  }
+}
+```
+
+#### Enabling All Event Types
+
+To receive all sub-agent events (text deltas, reasoning, sources, etc.), configure the supervisor:
+
+```ts
+const supervisorAgent = new Agent({
+  name: "Supervisor",
+  instructions: "You coordinate between agents",
+  llm: provider,
+  subAgents: [writerAgent, editorAgent],
+  supervisorConfig: {
+    fullStreamEventForwarding: {
+      types: ["tool-call", "tool-result", "text-delta", "reasoning", "source", "error", "finish"],
+      addSubAgentPrefix: true, // Adds agent name to tool names (default: true)
+    },
+  },
+});
+
+// Now you'll receive all event types
 if (response.fullStream) {
   for await (const chunk of response.fullStream) {
     const isSubAgentEvent = chunk.subAgentId && chunk.subAgentName;
 
     if (isSubAgentEvent) {
-      // Option 1: Skip all SubAgent events for a clean UI
-      continue;
-
-      // Option 2: Show only SubAgent tool activities
-      if (chunk.type === "tool-call" || chunk.type === "tool-result") {
-        console.log(`[${chunk.subAgentName}] Tool: ${chunk.toolName}`);
+      switch (chunk.type) {
+        case "text-delta":
+          process.stdout.write(chunk.textDelta); // Stream sub-agent text
+          break;
+        case "reasoning":
+          console.log(`[${chunk.subAgentName}] Thinking: ${chunk.reasoning}`);
+          break;
+        case "tool-call":
+          // Tool names include agent prefix: "WriterAgent: search_tool"
+          console.log(`[${chunk.subAgentName}] Using: ${chunk.toolName}`);
+          break;
       }
-      continue;
-
-      // Option 3: Show all SubAgent events with labels
-      console.log(`[${chunk.subAgentName}] ${chunk.type}:`, chunk);
-    } else {
-      // Process main supervisor events
-      handleMainAgentEvent(chunk);
     }
+  }
+}
+```
+
+#### Custom Event Filtering
+
+You can selectively enable specific event types:
+
+```ts
+supervisorConfig: {
+  fullStreamEventForwarding: {
+    // Only forward text and tool events, no reasoning or sources
+    types: ['tool-call', 'tool-result', 'text-delta'],
+    addSubAgentPrefix: false // Don't add agent name prefix to tools
   }
 }
 ```
@@ -288,10 +340,10 @@ if (response.fullStream) {
 - `source`: SubAgent context retrieval results
 - `tool-call`: SubAgent tool execution starts
 - `tool-result`: SubAgent tool execution completes
+- `error`: SubAgent errors
+- `finish`: SubAgent completion events
 
-This filtering approach allows you to create different UI experiences while preserving all events for debugging and monitoring.
-
-:::
+This configuration approach provides fine-grained control over which sub-agent events reach your application, allowing you to balance between information richness and stream performance.
 
 #### Markdown Formatting
 
@@ -1047,14 +1099,14 @@ const enterpriseWorkflow = new Agent({
 });
 ```
 
-### Cancellation with AbortSignal
+### Cancellation with AbortController
 
 **Why?** To provide graceful cancellation of long-running operations like LLM generation, tool execution, or streaming responses. This is essential for user-initiated cancellations, implementing timeouts, and preventing unnecessary work when results are no longer needed.
 
-VoltAgent supports the standard `AbortSignal` API across all generation methods. When an operation is aborted, it immediately stops processing, cancels any ongoing tool executions, and cleans up resources.
+VoltAgent supports the standard `AbortController` API across all generation methods. When an operation is aborted, it immediately stops processing, cancels any ongoing tool executions, and cleans up resources.
 
 ```ts
-import { Agent } from "@voltagent/core";
+import { Agent, isAbortError } from "@voltagent/core";
 import { VercelAIProvider } from "@voltagent/vercel-ai";
 import { openai } from "@ai-sdk/openai";
 
@@ -1065,25 +1117,23 @@ const agent = new Agent({
   model: openai("gpt-4o"),
 });
 
-// Example 1: User-initiated cancellation
-const controller = new AbortController();
-const signal = controller.signal;
+// Example: Timeout-based cancellation
+const abortController = new AbortController();
 
-// Set up a cancel button or timeout
-const cancelButton = document.getElementById("cancel-btn");
-cancelButton?.addEventListener("click", () => {
-  controller.abort("User cancelled the operation");
-});
+// Cancel after 5 seconds
+setTimeout(() => {
+  abortController.abort("Operation timeout after 5 seconds");
+}, 5000);
 
 try {
-  // Pass the signal to any generation method
+  // Pass the abortController to any generation method
   const response = await agent.generateText("Write a very long story...", {
-    signal, // The operation will be cancelled if signal is aborted
+    abortController, // The operation will be cancelled if timeout occurs
   });
   console.log(response.text);
 } catch (error) {
-  if (error.name === "AbortError") {
-    console.log("Operation was cancelled by user");
+  if (isAbortError(error)) {
+    console.log("Operation was cancelled:", error.message);
   } else {
     console.error("Generation failed:", error);
   }
@@ -1092,7 +1142,7 @@ try {
 
 #### Tool Cancellation
 
-When an `AbortSignal` is provided to agent methods, it's automatically propagated to any tools that the agent uses. Tools receive this signal as part of their execution options and can implement cancellation logic:
+When an `AbortController` is provided to agent methods, it's automatically propagated to tools through the operation context. Tools can access both the signal and the abort capability:
 
 ```ts
 const searchTool = createTool({
@@ -1102,9 +1152,16 @@ const searchTool = createTool({
     query: z.string().describe("The search query"),
   }),
   execute: async (args, options) => {
-    // AbortSignal is available in options.signal
-    const signal = options?.signal;
+    // Access the AbortController from operation context
+    const abortController = options?.operationContext?.abortController;
 
+    // Example: Tool can trigger abort if needed
+    if (args.query.includes("forbidden")) {
+      abortController?.abort("Search query contains forbidden terms");
+      return { error: "Search cancelled due to policy violation" };
+    }
+
+    const signal = abortController?.signal;
     // Pass signal to cancellable operations like fetch
     const response = await fetch(`https://api.search.com?q=${args.query}`, {
       signal: signal,
@@ -1115,7 +1172,12 @@ const searchTool = createTool({
 });
 ```
 
-This means if you cancel an agent operation, any active tool executions will also be cancelled gracefully if the tools implement signal handling.
+Tools access cancellation through `options.operationContext.abortController`:
+
+- `.signal` - Check if operation was aborted
+- `.abort()` - Trigger cancellation from within the tool
+
+This means if you cancel an agent operation, any active tool executions will also be cancelled gracefully. Additionally, tools can trigger cancellation themselves when needed.
 
 **Common Cancellation Scenarios:**
 

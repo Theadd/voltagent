@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import type { LogFilter } from "@voltagent/internal";
@@ -6,11 +8,11 @@ import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
 import type { z } from "zod";
 import { convertJsonSchemaToZod } from "zod-from-json-schema";
-import { zodSchemaToJsonUI } from "..";
 import type { AgentHistoryEntry } from "../agent/history";
 import type { AgentStatus } from "../agent/types";
 import { AgentEventEmitter } from "../events";
 import { LoggerProxy, getGlobalLogBuffer } from "../logger";
+import { zodSchemaToJsonUI } from "../utils/toolParser";
 import {
   type PackageUpdateInfo,
   checkForUpdates,
@@ -31,6 +33,7 @@ import {
   resumeWorkflowRoute,
   streamObjectRoute,
   streamRoute,
+  streamWorkflowRoute,
   suspendWorkflowRoute,
   textRoute,
 } from "./api.routes";
@@ -489,6 +492,157 @@ app.openapi(executeWorkflowRoute, async (c) => {
       {
         success: false as const,
         error: error instanceof Error ? error.message : "Failed to execute workflow",
+      } satisfies z.infer<typeof ErrorSchema>,
+      500,
+    );
+  }
+});
+
+// Stream workflow execution
+app.openapi(streamWorkflowRoute, async (c) => {
+  const { id } = c.req.valid("param") as { id: string };
+  const registry = WorkflowRegistry.getInstance();
+  const registeredWorkflow = registry.getWorkflow(id);
+
+  if (!registeredWorkflow) {
+    return c.json(
+      { success: false, error: "Workflow not found" } satisfies z.infer<typeof ErrorSchema>,
+      404,
+    );
+  }
+
+  try {
+    const { input, options } = c.req.valid("json") as {
+      input: any;
+      options?: {
+        userId?: string;
+        conversationId?: string;
+        userContext?: any;
+        executionId?: string;
+      };
+    };
+
+    // Create suspension controller
+    const suspendController = registeredWorkflow.workflow.createSuspendController?.();
+    if (!suspendController) {
+      throw new Error("Workflow does not support suspension");
+    }
+
+    // Convert userContext from object to Map if provided
+    const processedOptions = options
+      ? {
+          ...options,
+          ...(options.userContext && {
+            userContext: new Map(Object.entries(options.userContext)),
+          }),
+          suspendController: suspendController,
+        }
+      : {
+          suspendController: suspendController,
+        };
+
+    // Create abort controller for client disconnection
+    const abortController = new AbortController();
+
+    // Listen for request abort (when client disconnects)
+    c.req.raw.signal?.addEventListener("abort", () => {
+      abortController.abort();
+      suspendController.suspend("Client disconnected");
+    });
+
+    // Create SSE stream
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+
+        try {
+          // Use workflow.stream() method
+          logger.trace(`[API] Starting workflow stream for ${id}`);
+          const workflowStream = registeredWorkflow.workflow.stream(input, processedOptions);
+
+          // Store execution ID for active tracking
+          const executionId: string | null = workflowStream.executionId;
+
+          // Track as active execution
+          if (executionId) {
+            registry.activeExecutions.set(executionId, suspendController);
+          }
+
+          // Stream events to client
+          for await (const event of workflowStream) {
+            // Check if client disconnected
+            if (abortController.signal.aborted) {
+              logger.trace(`[API] Client disconnected, aborting workflow stream ${executionId}`);
+              workflowStream.abort();
+              break;
+            }
+
+            // Send event as SSE
+            const sseEvent = `data: ${JSON.stringify(event)}\n\n`;
+            controller.enqueue(encoder.encode(sseEvent));
+
+            // Log important events
+            if (event.type === "workflow-suspended") {
+              logger.debug(`[API] Workflow ${executionId} suspended, keeping stream open`);
+              // Stream stays open, waiting for resume
+            } else if (event.type === "workflow-complete" || event.type === "workflow-error") {
+              logger.debug(`[API] Workflow ${executionId} finished with ${event.type}`);
+            }
+          }
+
+          // Send final result
+          const result = await workflowStream.result;
+          const status = await workflowStream.status;
+          const endAt = await workflowStream.endAt;
+
+          const finalEvent = {
+            type: "workflow-result",
+            executionId,
+            status,
+            result,
+            endAt: endAt instanceof Date ? endAt.toISOString() : endAt,
+          };
+
+          const sseFinalEvent = `data: ${JSON.stringify(finalEvent)}\n\n`;
+          controller.enqueue(encoder.encode(sseFinalEvent));
+
+          // Remove from active executions
+          if (executionId) {
+            registry.activeExecutions.delete(executionId);
+          }
+
+          logger.trace(`[API] Workflow stream ${executionId} completed`);
+        } catch (error) {
+          logger.error("[API] Workflow stream error:", { error });
+
+          // Send error event
+          const errorEvent = {
+            type: "error",
+            error: error instanceof Error ? error.message : "Stream error occurred",
+          };
+          const sseErrorEvent = `data: ${JSON.stringify(errorEvent)}\n\n`;
+          controller.enqueue(encoder.encode(sseErrorEvent));
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    // Return SSE response
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no", // Disable Nginx buffering
+      },
+    });
+  } catch (error) {
+    logger.error("Failed to stream workflow:", { error });
+    return c.json(
+      {
+        success: false as const,
+        error: error instanceof Error ? error.message : "Failed to stream workflow",
       } satisfies z.infer<typeof ErrorSchema>,
       500,
     );
@@ -1495,6 +1649,118 @@ app.post("/updates/:packageName", async (c: ApiContext) => {
       {
         success: false,
         error: error instanceof Error ? error.message : "Failed to update package",
+      },
+      500,
+    );
+  }
+});
+
+// Setup observability endpoint
+app.post("/setup-observability", async (c: ApiContext) => {
+  try {
+    const body = await c.req.json();
+    const { publicKey, secretKey } = body;
+
+    if (!publicKey || !secretKey) {
+      return c.json(
+        {
+          success: false,
+          error: "Missing publicKey or secretKey",
+        },
+        400,
+      );
+    }
+
+    // Update .env file
+    const envPath = path.join(process.cwd(), ".env");
+
+    try {
+      // Read existing .env content
+      let envContent = "";
+      try {
+        envContent = await fs.readFile(envPath, "utf-8");
+      } catch (_error) {
+        // If .env doesn't exist, we'll create it
+        logger.debug(".env file not found, will create new one");
+      }
+
+      // Update or add keys
+      const lines = envContent.split("\n");
+      let publicKeyUpdated = false;
+      let secretKeyUpdated = false;
+
+      const updatedLines = lines.map((line) => {
+        const trimmedLine = line.trim();
+
+        // Update existing or commented public key
+        if (
+          trimmedLine.startsWith("VOLTAGENT_PUBLIC_KEY=") ||
+          trimmedLine.startsWith("# VOLTAGENT_PUBLIC_KEY=") ||
+          trimmedLine.startsWith("#VOLTAGENT_PUBLIC_KEY=")
+        ) {
+          publicKeyUpdated = true;
+          return `VOLTAGENT_PUBLIC_KEY=${publicKey}`;
+        }
+
+        // Update existing or commented secret key
+        if (
+          trimmedLine.startsWith("VOLTAGENT_SECRET_KEY=") ||
+          trimmedLine.startsWith("# VOLTAGENT_SECRET_KEY=") ||
+          trimmedLine.startsWith("#VOLTAGENT_SECRET_KEY=")
+        ) {
+          secretKeyUpdated = true;
+          return `VOLTAGENT_SECRET_KEY=${secretKey}`;
+        }
+
+        return line;
+      });
+
+      envContent = updatedLines.join("\n");
+
+      // If keys weren't found, add them at the end
+      if (!publicKeyUpdated || !secretKeyUpdated) {
+        if (!envContent.endsWith("\n") && envContent.length > 0) {
+          envContent += "\n";
+        }
+
+        if (!publicKeyUpdated && !secretKeyUpdated) {
+          envContent += `
+# VoltAgent Observability
+VOLTAGENT_PUBLIC_KEY=${publicKey}
+VOLTAGENT_SECRET_KEY=${secretKey}
+`;
+        } else if (!publicKeyUpdated) {
+          envContent += `VOLTAGENT_PUBLIC_KEY=${publicKey}\n`;
+        } else if (!secretKeyUpdated) {
+          envContent += `VOLTAGENT_SECRET_KEY=${secretKey}\n`;
+        }
+      }
+
+      // Write updated content
+      await fs.writeFile(envPath, envContent);
+
+      logger.info("Observability configuration updated in .env file");
+
+      return c.json({
+        success: true,
+        message: "Observability configured successfully. Please restart your application.",
+      });
+    } catch (error) {
+      logger.error("Failed to update .env file:", { error });
+      return c.json(
+        {
+          success: false,
+          error: "Failed to update .env file",
+        },
+        500,
+      );
+    }
+  } catch (error) {
+    logger.error("Failed to setup observability:", { error });
+    return c.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to setup observability",
       },
       500,
     );

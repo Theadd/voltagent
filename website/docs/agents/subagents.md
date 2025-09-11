@@ -112,6 +112,261 @@ const supervisorAgent = new Agent({
 });
 ```
 
+### Stream Event Forwarding Configuration
+
+Control which events from subagents are forwarded to the parent stream. By default, only `tool-call` and `tool-result` events are forwarded to keep the stream focused on meaningful actions.
+
+```ts
+const supervisorAgent = new Agent({
+  name: "Content Supervisor",
+  instructions: "Coordinate content creation workflow",
+  llm: new VercelAIProvider(),
+  model: openai("gpt-4o-mini"),
+  subAgents: [writerAgent, editorAgent],
+
+  supervisorConfig: {
+    // Configure which subagent events to forward
+    fullStreamEventForwarding: {
+      // Default: ['tool-call', 'tool-result']
+      // Enable all event types for complete visibility
+      types: ["tool-call", "tool-result", "text-delta", "reasoning", "source", "error", "finish"],
+
+      // Add subagent name as prefix to tool names (default: true)
+      // When true: "WriterAgent: search_tool"
+      // When false: "search_tool"
+      addSubAgentPrefix: true,
+    },
+  },
+});
+```
+
+**Common Configurations:**
+
+```ts
+// Minimal - Only tool events (default)
+fullStreamEventForwarding: {
+  types: ['tool-call', 'tool-result'],
+}
+
+// Text + Tools - See what subagents are saying and doing
+fullStreamEventForwarding: {
+  types: ['tool-call', 'tool-result', 'text-delta'],
+}
+
+// Full visibility - All events including reasoning
+fullStreamEventForwarding: {
+  types: ['tool-call', 'tool-result', 'text-delta', 'reasoning', 'source', 'error', 'finish'],
+}
+
+// Clean tool names - No agent prefix
+fullStreamEventForwarding: {
+  types: ['tool-call', 'tool-result'],
+  addSubAgentPrefix: false,
+}
+```
+
+This configuration helps you balance between stream performance and information richness, allowing you to see exactly what you need from subagent interactions.
+
+### Error Handling Configuration
+
+Control how your supervisor handles subagent failures with configurable error handling behavior. This is especially useful when subagents encounter stream errors or fail to generate responses.
+
+```ts
+const supervisorAgent = new Agent({
+  name: "Supervisor",
+  instructions: "Coordinate between agents",
+  llm: new VercelAIProvider(),
+  model: openai("gpt-4o-mini"),
+  subAgents: [dataProcessor, analyzer],
+
+  supervisorConfig: {
+    // Control whether stream errors throw exceptions
+    throwOnStreamError: false, // default: false
+
+    // Control whether error messages appear in empty responses
+    includeErrorInEmptyResponse: true, // default: true
+  },
+});
+```
+
+#### Configuration Options
+
+**`throwOnStreamError`** (boolean, default: `false`)
+
+- When `false`: Stream errors are caught and returned as error results with `status: "error"`
+- When `true`: Stream errors throw exceptions that must be caught with try/catch
+- Use `true` when you want to handle errors at a higher level or trigger retry logic
+
+**`includeErrorInEmptyResponse`** (boolean, default: `true`)
+
+- When `true`: Error messages are included in the response when no content was generated
+- When `false`: Returns empty string in result, but still marks status as "error"
+- Use `false` when you want to handle error messaging yourself
+
+#### Common Error Handling Patterns
+
+**Default - Graceful Error Handling:**
+
+```ts
+// Errors are returned as results with helpful messages
+supervisorConfig: {
+  throwOnStreamError: false,
+  includeErrorInEmptyResponse: true,
+}
+
+// Usage:
+const result = await supervisor.streamText("Process data");
+// If subagent fails:
+// result contains error message like "Error in DataProcessor: Stream failed"
+```
+
+**Exception-Based - For Retry Logic:**
+
+```ts
+// Errors throw exceptions for custom handling
+supervisorConfig: {
+  throwOnStreamError: true,
+}
+
+// Usage with retry:
+let retries = 3;
+while (retries > 0) {
+  try {
+    const result = await supervisor.streamText("Process data");
+    break;
+  } catch (error) {
+    console.error(`Attempt failed: ${error.message}`);
+    retries--;
+    if (retries === 0) throw error;
+  }
+}
+```
+
+**Silent Errors - Custom Messaging:**
+
+```ts
+// Errors don't include automatic messages
+supervisorConfig: {
+  includeErrorInEmptyResponse: false,
+}
+
+// Usage with custom error handling:
+const result = await supervisor.streamText("Process data");
+for await (const event of result.fullStream) {
+  if (event.type === "error") {
+    // Provide custom user-friendly error message
+    console.log("We're having trouble processing your request. Please try again.");
+  }
+}
+```
+
+**Production Setup - Detailed Error Tracking:**
+
+```ts
+supervisorConfig: {
+  throwOnStreamError: false, // Don't crash the app
+  includeErrorInEmptyResponse: true, // Help with debugging
+
+  // Also capture all error events for monitoring
+  fullStreamEventForwarding: {
+    types: ['tool-call', 'tool-result', 'error'],
+  },
+}
+```
+
+#### Error Handling in Practice
+
+When a subagent encounters an error, the supervisor's behavior depends on your configuration:
+
+```ts
+// Example: Subagent fails during stream
+const supervisor = new Agent({
+  name: "Supervisor",
+  subAgents: [unreliableAgent],
+  supervisorConfig: {
+    throwOnStreamError: false,
+    includeErrorInEmptyResponse: true,
+  },
+});
+
+// The supervisor handles the failure gracefully
+const response = await supervisor.streamText("Do something risky");
+
+// Check the response
+if (response.status === "error") {
+  console.log("Subagent failed:", response.error);
+  // response.result contains: "Error in UnreliableAgent: [error details]"
+} else {
+  // Process successful response
+}
+```
+
+This configuration ensures your supervisor agents can handle subagent failures gracefully, providing better reliability and debugging capabilities in production environments.
+
+#### Using with fullStream
+
+When using `fullStream` to get detailed streaming events, the configuration controls what you receive from subagents:
+
+```ts
+// Stream with full event details
+const result = await supervisorAgent.streamText("Create and edit content", {
+  fullStream: true, // Enable full streaming to get all event types
+});
+
+// Process different event types
+for await (const event of result.fullStream) {
+  switch (event.type) {
+    case "tool-call":
+      console.log(`Tool called: ${event.data.toolName}`);
+      break;
+    case "tool-result":
+      console.log(`Tool result: ${event.data.result}`);
+      break;
+    case "text-delta":
+      // Only appears if included in types array
+      console.log(`Text: ${event.data}`);
+      break;
+    case "reasoning":
+      // Only appears if included in types array
+      console.log(`Reasoning: ${event.data}`);
+      break;
+  }
+}
+```
+
+#### Filtering Subagent Events
+
+You can identify which events come from subagents by checking for `subAgentId` and `subAgentName` properties:
+
+```ts
+const result = await supervisorAgent.streamText("Create and edit content", {
+  fullStream: true,
+});
+
+for await (const event of result.fullStream) {
+  // Check if this event is from a subagent
+  if (event.subAgentId && event.subAgentName) {
+    console.log(`Event from subagent ${event.subAgentName}:`);
+    console.log(`  Type: ${event.type}`);
+    console.log(`  Data:`, event.data);
+
+    // Filter by specific subagent
+    if (event.subAgentName === "WriterAgent") {
+      // Handle writer agent events specifically
+    }
+  } else {
+    // This is from the supervisor agent itself
+    console.log(`Supervisor event: ${event.type}`);
+  }
+}
+```
+
+This allows you to:
+
+- Distinguish between supervisor and subagent events
+- Filter events by specific subagent
+- Apply different handling logic based on the event source
+
 ### Complete System Message Override
 
 For complete control over the supervisor's behavior, you can provide a custom `systemMessage` that entirely replaces the default template:
@@ -172,6 +427,34 @@ supervisorConfig: {
 ```ts
 supervisorConfig: {
   includeAgentsMemory: false; // Fresh context each interaction (default: true)
+}
+```
+
+**Configure event forwarding:**
+
+```ts
+supervisorConfig: {
+  fullStreamEventForwarding: {
+    types: ['tool-call', 'tool-result', 'text-delta'], // Control which events to forward
+    addSubAgentPrefix: false // Remove agent name prefix from tools
+  }
+}
+```
+
+**Handle errors gracefully:**
+
+```ts
+supervisorConfig: {
+  throwOnStreamError: false, // Return errors as results (default)
+  includeErrorInEmptyResponse: true // Include error details in response (default)
+}
+```
+
+**Throw exceptions for retry logic:**
+
+```ts
+supervisorConfig: {
+  throwOnStreamError: true; // Throw exceptions on subagent failures
 }
 ```
 

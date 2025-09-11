@@ -1,5 +1,194 @@
 # @voltagent/supabase
 
+## 0.1.20
+
+### Patch Changes
+
+- [#496](https://github.com/VoltAgent/voltagent/pull/496) [`0dcc675`](https://github.com/VoltAgent/voltagent/commit/0dcc6759eb1a95d756a49139610b5352db2e91b0) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: resolve SupabaseClient ESM import error
+
+  Fixed an issue where `SupabaseClient` was not available as a runtime export in the ESM build of @supabase/supabase-js v2.54.0. The type is exported in TypeScript definitions but not in the actual ESM runtime.
+
+  ## What Changed
+  - Changed `SupabaseClient` to a type-only import using `import { type SupabaseClient }`
+  - Replaced `P.instanceOf(SupabaseClient)` pattern matching with `P.not(P.nullish)` since the class is not available at runtime
+  - Added type assertion to maintain TypeScript type safety
+
+  ## Before
+
+  ```typescript
+  import { SupabaseClient, createClient } from "@supabase/supabase-js";
+  // ...
+  .with({ client: P.instanceOf(SupabaseClient) }, (o) => o.client)
+  ```
+
+  ## After
+
+  ```typescript
+  import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+  // ...
+  .with({ client: P.not(P.nullish) }, (o) => o.client as SupabaseClient)
+  ```
+
+  This ensures compatibility with both CommonJS and ESM module systems while maintaining full type safety.
+
+- Updated dependencies [[`5968cef`](https://github.com/VoltAgent/voltagent/commit/5968cef5fe417cd118867ac78217dddfbd60493d)]:
+  - @voltagent/internal@0.0.9
+  - @voltagent/logger@0.1.4
+
+## 0.1.19
+
+### Patch Changes
+
+- [#479](https://github.com/VoltAgent/voltagent/pull/479) [`8b55691`](https://github.com/VoltAgent/voltagent/commit/8b556910b0d1000bf0a956098e5ca49e733b9476) Thanks [@zrosenbauer](https://github.com/zrosenbauer)! - feat: Added `logger` to the SupabaseMemory provider and provided improved type safety for the constructor
+
+  ### New Features
+
+  #### `logger`
+
+  You can now pass in a `logger` to the SupabaseMemory provider and it will be used to log messages.
+
+  ```typescript
+  import { createPinoLogger } from "@voltagent/logger";
+
+  const memory = new SupabaseMemory({
+    client: supabaseClient,
+    logger: createPinoLogger({ name: "memory-supabase" }),
+  });
+  ```
+
+  #### Improved type safety for the constructor
+
+  The constructor now has improved type safety for the `client` and `logger` options.
+
+  ```typescript
+  const memory = new SupabaseMemory({
+    client: supabaseClient,
+    supabaseUrl: "https://test.supabase.co", // this will show a TypeScript error
+    supabaseKey: "test-key",
+  });
+  ```
+
+  The `client` option also checks that the `client` is an instance of `SupabaseClient`
+
+  ```typescript
+  const memory = new SupabaseMemory({
+    client: aNonSupabaseClient, // this will show a TypeScript error AND throw an error at runtime
+  });
+  ```
+
+  ### Internal Changes
+  - Cleaned up and reorganized the SupabaseMemory class
+  - Renamed files to be more descriptive and not in the `index.ts` file
+  - Added improved mocking to the test implementation for the SupabaseClient
+  - Removed all `console.*` statements and added a `biome` lint rule to prevent them from being added back
+
+## 0.1.18
+
+### Patch Changes
+
+- [#475](https://github.com/VoltAgent/voltagent/pull/475) [`9b4ea38`](https://github.com/VoltAgent/voltagent/commit/9b4ea38b28df248c1e1ad5541d414bd47838df9a) Thanks [@zrosenbauer](https://github.com/zrosenbauer)! - fix: Remove other potentially problematic `JSON.stringify` usages
+
+## 0.1.17
+
+### Patch Changes
+
+- [#466](https://github.com/VoltAgent/voltagent/pull/466) [`730232e`](https://github.com/VoltAgent/voltagent/commit/730232e730cdbd1bb7de6acff8519e8af93f2abf) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: memory messages now return parsed objects instead of JSON strings
+
+  ## What Changed for You
+
+  Memory messages that contain structured content (like tool calls or multi-part messages) now return as **parsed objects** instead of **JSON strings**. This is a breaking change if you were manually parsing these messages.
+
+  ## Before - You Had to Parse JSON Manually
+
+  ```typescript
+  // ❌ OLD BEHAVIOR: Content came as JSON string
+  const messages = await memory.getMessages({ conversationId: "123" });
+
+  // What you got from memory:
+  console.log(messages[0]);
+  // {
+  //   role: "user",
+  //   content: '[{"type":"text","text":"Hello"},{"type":"image","image":"data:..."}]',  // STRING!
+  //   type: "text"
+  // }
+
+  // You had to manually parse the JSON string:
+  const content = JSON.parse(messages[0].content); // Parse required!
+  console.log(content);
+  // [
+  //   { type: "text", text: "Hello" },
+  //   { type: "image", image: "data:..." }
+  // ]
+
+  // Tool calls were also JSON strings:
+  console.log(messages[1].content);
+  // '[{"type":"tool-call","toolCallId":"123","toolName":"weather"}]'  // STRING!
+  ```
+
+  ## After - You Get Parsed Objects Automatically
+
+  ```typescript
+  // ✅ NEW BEHAVIOR: Content comes as proper objects
+  const messages = await memory.getMessages({ conversationId: "123" });
+
+  // What you get from memory NOW:
+  console.log(messages[0]);
+  // {
+  //   role: "user",
+  //   content: [
+  //     { type: "text", text: "Hello" },      // OBJECT!
+  //     { type: "image", image: "data:..." }  // OBJECT!
+  //   ],
+  //   type: "text"
+  // }
+
+  // Direct access - no JSON.parse needed!
+  const content = messages[0].content; // Already parsed!
+  console.log(content[0].text); // "Hello"
+
+  // Tool calls are proper objects:
+  console.log(messages[1].content);
+  // [
+  //   { type: "tool-call", toolCallId: "123", toolName: "weather" }  // OBJECT!
+  // ]
+  ```
+
+  ## Breaking Change Warning ⚠️
+
+  If your code was doing this:
+
+  ```typescript
+  // This will now FAIL because content is already parsed
+  const parsed = JSON.parse(msg.content); // ❌ Error: not a string!
+  ```
+
+  Change it to:
+
+  ```typescript
+  // Just use the content directly
+  const content = msg.content; // ✅ Already an object/array
+  ```
+
+  ## What Gets Auto-Parsed
+  - **String content** → Stays as string ✅
+  - **Structured content** (arrays) → Auto-parsed to objects ✅
+  - **Tool calls** → Auto-parsed to objects ✅
+  - **Tool results** → Auto-parsed to objects ✅
+  - **Metadata fields** → Auto-parsed to objects ✅
+
+  ## Why This Matters
+  - **No more JSON.parse errors** in your application
+  - **Type-safe access** to structured content
+  - **Cleaner code** without try/catch blocks
+  - **Consistent behavior** with how agents handle messages
+
+  ## Migration Guide
+  1. **Remove JSON.parse calls** for message content
+  2. **Remove try/catch** blocks around parsing
+  3. **Use content directly** as objects/arrays
+
+  Your memory messages now "just work" without manual parsing!
+
 ## 0.1.16
 
 ### Patch Changes

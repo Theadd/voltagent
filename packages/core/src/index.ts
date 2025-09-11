@@ -27,6 +27,7 @@ export type {
   TextSubAgentConfig,
   ObjectSubAgentConfig,
 } from "./agent/subagent/types";
+export type { SupervisorConfig } from "./agent/types";
 export * from "./tool";
 export * from "./tool/reasoning/index";
 export * from "./memory";
@@ -40,6 +41,7 @@ export type {
   OperationContext,
   ToolExecutionContext,
   VoltAgentError,
+  AbortError,
   StreamTextFinishResult,
   StreamTextOnFinishCallback,
   StreamObjectFinishResult,
@@ -47,6 +49,7 @@ export type {
   ToolErrorInfo,
   DynamicValueOptions,
 } from "./agent/types";
+export { isAbortError, isVoltAgentError } from "./agent/types";
 export type { AgentHistoryEntry, HistoryStatus } from "./agent/history";
 export type { AgentHooks } from "./agent/hooks";
 export * from "./types";

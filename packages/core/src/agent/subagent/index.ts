@@ -1,4 +1,5 @@
 import type { DangerouslyAllowAny } from "@voltagent/internal/types";
+import { safeStringify } from "@voltagent/internal/utils";
 import type { MergeDeep } from "type-fest";
 import { z } from "zod";
 import { getGlobalLogger } from "../../logger";
@@ -11,6 +12,7 @@ import type {
   StreamEventToolCall,
   StreamEventToolResult,
 } from "../../utils/streams";
+import { streamEventForwarder } from "../../utils/streams";
 import type { StreamEvent, StreamEventError } from "../../utils/streams/types";
 import type { Agent } from "../agent";
 import type { BaseMessage } from "../providers";
@@ -38,13 +40,24 @@ export class SubAgentManager {
   private subAgentConfigs: SubAgentConfig[] = [];
 
   /**
+   * Supervisor configuration including event forwarding settings
+   */
+  private supervisorConfig?: SupervisorConfig;
+
+  /**
    * Creates a new SubAgentManager instance
    *
    * @param agentName - The name of the agent that owns this sub-agent manager
    * @param subAgents - Initial sub-agent configurations to add
+   * @param supervisorConfig - Optional supervisor configuration including event forwarding
    */
-  constructor(agentName: string, subAgents: SubAgentConfig[] = []) {
+  constructor(
+    agentName: string,
+    subAgents: SubAgentConfig[] = [],
+    supervisorConfig?: SupervisorConfig,
+  ) {
     this.agentName = agentName;
+    this.supervisorConfig = supervisorConfig;
 
     // Initialize with empty array
     this.subAgentConfigs = [];
@@ -282,6 +295,9 @@ ${guidelinesText}
     // Use the provided conversationId or generate a new one
     const handoffConversationId = conversationId || crypto.randomUUID();
 
+    // Track if we should rethrow stream errors
+    let streamErrorToThrow: Error | null = null;
+
     try {
       // Call onHandoff hook if source agent is provided
       if (sourceAgent && targetAgent.hooks) {
@@ -298,7 +314,7 @@ ${guidelinesText}
       let taskContent = task;
       if (context && Object.keys(context).length > 0) {
         taskContent = `Task handed off from ${sourceAgent?.name || this.agentName} to ${targetAgent.name}:
-${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
+${task}\n\nContext: ${safeStringify(context, { indentation: 2 })}`;
       }
 
       const taskMessage: BaseMessage = {
@@ -312,7 +328,9 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
         parentAgentId: sourceAgent?.id || parentAgentId,
         parentHistoryEntryId,
         parentOperationContext,
-        // Pass the abort signal from parent's operation context to subagent
+        // Pass the abort controller from parent's operation context to subagent
+        abortController: parentOperationContext?.abortController,
+        // Keep signal for backward compatibility
         signal: parentOperationContext?.signal,
         // Pass maxSteps from parent to subagent (inherits parent's effective maxSteps)
         maxSteps,
@@ -342,7 +360,7 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
           schema,
           callOptions,
         );
-        finalResult = JSON.stringify(response.object);
+        finalResult = safeStringify(response.object);
         finalMessages = [taskMessage, { role: "assistant", content: finalResult }];
       } else if (method === "streamObject") {
         if (!schema) {
@@ -364,7 +382,7 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
           }
         }
 
-        finalResult = JSON.stringify(finalObject);
+        finalResult = safeStringify(finalObject);
         finalMessages = [taskMessage, { role: "assistant", content: finalResult }];
       } else {
         // Default to streamText for backward compatibility
@@ -376,7 +394,22 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
         // Collect all stream chunks for final result
         finalResult = "";
 
-        if (streamResponse.fullStream) {
+        // Track stream errors and whether we received any text content
+        let streamError: Error | null = null;
+        let hasTextContent = false;
+
+        if (streamResponse.fullStream && forwardEvent) {
+          // Get event forwarding configuration
+          const eventForwardingConfig = {
+            forwarder: forwardEvent,
+            types: this.supervisorConfig?.fullStreamEventForwarding?.types || [
+              "tool-call",
+              "tool-result",
+            ],
+            addSubAgentPrefix:
+              this.supervisorConfig?.fullStreamEventForwarding?.addSubAgentPrefix ?? true,
+          };
+
           // Consume the full stream to capture all events
           for await (const part of streamResponse.fullStream) {
             const timestamp = new Date().toISOString();
@@ -384,6 +417,7 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
             switch (part.type) {
               case "text-delta": {
                 finalResult += part.textDelta;
+                hasTextContent = true;
 
                 const eventData = {
                   type: "text-delta",
@@ -395,10 +429,8 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
                   subAgentName: targetAgent.name,
                 } satisfies StreamEventTextDelta;
 
-                // Forward event in real-time
-                if (forwardEvent) {
-                  await forwardEvent(eventData);
-                }
+                // Forward event using configuration
+                await streamEventForwarder(eventData, eventForwardingConfig);
                 break;
               }
               case "reasoning": {
@@ -412,10 +444,8 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
                   subAgentName: targetAgent.name,
                 } satisfies StreamEventReasoning;
 
-                // Forward event in real-time
-                if (forwardEvent) {
-                  await forwardEvent(eventData);
-                }
+                // Forward event using configuration
+                await streamEventForwarder(eventData, eventForwardingConfig);
                 break;
               }
               case "source": {
@@ -429,10 +459,8 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
                   subAgentName: targetAgent.name,
                 } satisfies StreamEventSource;
 
-                // Forward event in real-time
-                if (forwardEvent) {
-                  await forwardEvent(eventData);
-                }
+                // Forward event using configuration
+                await streamEventForwarder(eventData, eventForwardingConfig);
                 break;
               }
               case "tool-call": {
@@ -448,10 +476,8 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
                   subAgentName: targetAgent.name,
                 } satisfies StreamEventToolCall;
 
-                // Forward event in real-time
-                if (forwardEvent) {
-                  await forwardEvent(eventData);
-                }
+                // Forward event using configuration
+                await streamEventForwarder(eventData, eventForwardingConfig);
                 break;
               }
               case "tool-result": {
@@ -467,14 +493,15 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
                   subAgentName: targetAgent.name,
                 } satisfies StreamEventToolResult;
 
-                // Forward event in real-time
-                if (forwardEvent) {
-                  await forwardEvent(eventData);
-                }
+                // Forward event using configuration
+                await streamEventForwarder(eventData, eventForwardingConfig);
                 break;
               }
 
               case "error": {
+                // Capture the error for proper handling
+                streamError = part.error;
+
                 const eventData = {
                   type: "error",
                   data: {
@@ -487,11 +514,9 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
                   subAgentName: targetAgent.name,
                 } satisfies StreamEventError;
 
-                // Forward event in real-time
-                if (forwardEvent) {
-                  // @ts-expect-error - fix bad type
-                  await forwardEvent(eventData);
-                }
+                // Forward event using configuration
+                // @ts-expect-error - fix bad type
+                await streamEventForwarder(eventData, eventForwardingConfig);
                 break;
               }
             }
@@ -499,7 +524,50 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
         } else {
           for await (const part of streamResponse.textStream) {
             finalResult += part;
+            hasTextContent = true;
           }
+        }
+
+        // Handle stream errors based on configuration
+        if (streamError && !hasTextContent) {
+          const errorMessage =
+            streamError instanceof Error ? streamError.message : String(streamError);
+
+          // Check if we should throw the error
+          if (this.supervisorConfig?.throwOnStreamError) {
+            // Store the error to throw after the try-catch
+            streamErrorToThrow = new Error(`Stream error in ${targetAgent.name}: ${errorMessage}`);
+            // Still throw here to exit the try block
+            throw streamErrorToThrow;
+          }
+
+          // Check if we should include error message in empty response
+          const includeErrorInResponse = this.supervisorConfig?.includeErrorInEmptyResponse ?? true;
+
+          return {
+            result: includeErrorInResponse ? `Error in ${targetAgent.name}: ${errorMessage}` : "",
+            conversationId: handoffConversationId,
+            messages: [
+              taskMessage,
+              {
+                role: "system" as const,
+                content: `Stream error occurred: ${errorMessage}`,
+              },
+            ],
+            status: "error",
+            error: streamError,
+          };
+        }
+
+        // If we have partial content despite an error, log warning but return the content
+        if (streamError && hasTextContent) {
+          const logger =
+            options.parentOperationContext?.logger ||
+            getGlobalLogger().child({ component: "subagent-manager" });
+          logger.warn(`Stream error occurred after partial content in ${targetAgent.name}`, {
+            error: streamError,
+            partialContent: finalResult,
+          });
         }
 
         finalMessages = [taskMessage, { role: "assistant", content: finalResult }];
@@ -512,6 +580,11 @@ ${task}\n\nContext: ${JSON.stringify(context, null, 2)}`;
         status: "success",
       };
     } catch (error) {
+      // If this is the stream error we marked for rethrowing, rethrow it
+      if (streamErrorToThrow && error === streamErrorToThrow) {
+        throw error;
+      }
+
       const logger =
         options.parentOperationContext?.logger ||
         getGlobalLogger().child({ component: "subagent-manager" });
