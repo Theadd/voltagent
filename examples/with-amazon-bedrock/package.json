@@ -5,12 +5,12 @@
     "@ai-sdk/amazon-bedrock": "^3.0.0",
     "@aws-sdk/credential-providers": "~3.799.0",
     "@voltagent/cli": "^0.1.10",
-    "@voltagent/core": "^1.0.0",
+    "@voltagent/core": "^1.0.1",
     "@voltagent/libsql": "^1.0.0",
     "@voltagent/logger": "^1.0.0",
-    "@voltagent/server-hono": "^1.0.0",
+    "@voltagent/server-hono": "^1.0.2",
     "ai": "^5.0.12",
-    "zod": "^3.25.0"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.2.1",
