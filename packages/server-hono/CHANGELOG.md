@@ -1,5 +1,22 @@
 # @voltagent/server-hono
 
+## 1.0.3
+
+### Patch Changes
+
+- [`3177a60`](https://github.com/VoltAgent/voltagent/commit/3177a60a2632c200150e8a71d706b44df508cc66) Thanks [@omeraplak](https://github.com/omeraplak)! - fix: version bump
+
+- Updated dependencies [[`3177a60`](https://github.com/VoltAgent/voltagent/commit/3177a60a2632c200150e8a71d706b44df508cc66)]:
+  - @voltagent/server-core@1.0.3
+
+## 2.0.0
+
+### Patch Changes
+
+- Updated dependencies [[`63d4787`](https://github.com/VoltAgent/voltagent/commit/63d4787bd92135fa2d6edffb3b610889ddc0e3f5)]:
+  - @voltagent/core@1.1.0
+  - @voltagent/server-core@2.0.0
+
 ## 1.0.2
 
 ### Patch Changes
