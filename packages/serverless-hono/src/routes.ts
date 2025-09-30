@@ -8,6 +8,9 @@ import {
   getSpanByIdHandler,
   getTraceByIdHandler,
   getTracesHandler,
+  getWorkingMemoryHandler,
+  listMemoryConversationsHandler,
+  listMemoryUsersHandler,
   queryLogsHandler,
 } from "@voltagent/server-core";
 import type {
@@ -19,10 +22,14 @@ import {
   type A2ARequestContext,
   A2A_ROUTES,
   AGENT_ROUTES,
+  OBSERVABILITY_MEMORY_ROUTES,
   OBSERVABILITY_ROUTES,
+  UPDATE_ROUTES,
   WORKFLOW_ROUTES,
   executeA2ARequest,
+  getConversationMessagesHandler,
   handleChatStream,
+  handleCheckUpdates,
   handleExecuteWorkflow,
   handleGenerateObject,
   handleGenerateText,
@@ -33,6 +40,7 @@ import {
   handleGetWorkflow,
   handleGetWorkflowState,
   handleGetWorkflows,
+  handleInstallUpdates,
   handleResumeWorkflow,
   handleStreamObject,
   handleStreamText,
@@ -282,6 +290,19 @@ export function registerLogRoutes(app: Hono, deps: ServerProviderDeps, logger: L
   });
 }
 
+export function registerUpdateRoutes(app: Hono, deps: ServerProviderDeps, logger: Logger) {
+  app.get(UPDATE_ROUTES.checkUpdates.path, async (c) => {
+    const response = await handleCheckUpdates(deps, logger);
+    return c.json(response, response.success ? 200 : 500);
+  });
+
+  app.post(UPDATE_ROUTES.installUpdates.path, async (c) => {
+    const body = (await readJsonBody<{ packageName?: string }>(c, logger)) ?? {};
+    const response = await handleInstallUpdates(body.packageName, deps, logger);
+    return c.json(response, response.success ? 200 : 500);
+  });
+}
+
 export function registerObservabilityRoutes(app: Hono, deps: ServerProviderDeps, logger: Logger) {
   app.post(OBSERVABILITY_ROUTES.setupObservability.path, (c) =>
     c.json(
@@ -339,6 +360,88 @@ export function registerObservabilityRoutes(app: Hono, deps: ServerProviderDeps,
     logger.debug("[serverless] GET /observability/logs", { query });
     const result = await queryLogsHandler(query, deps);
     return c.json(result, result.success ? 200 : 400);
+  });
+
+  app.get(OBSERVABILITY_MEMORY_ROUTES.listMemoryUsers.path, async (c) => {
+    const query = c.req.query();
+    logger.debug("[serverless] GET /observability/memory/users", { query });
+    const result = await listMemoryUsersHandler(deps, {
+      agentId: query.agentId,
+      limit: query.limit ? Number.parseInt(query.limit, 10) : undefined,
+      offset: query.offset ? Number.parseInt(query.offset, 10) : undefined,
+      search: query.search,
+    });
+
+    return c.json(result, result.success ? 200 : 500);
+  });
+
+  app.get(OBSERVABILITY_MEMORY_ROUTES.listMemoryConversations.path, async (c) => {
+    const query = c.req.query();
+    logger.debug("[serverless] GET /observability/memory/conversations", { query });
+    const result = await listMemoryConversationsHandler(deps, {
+      agentId: query.agentId,
+      userId: query.userId,
+      limit: query.limit ? Number.parseInt(query.limit, 10) : undefined,
+      offset: query.offset ? Number.parseInt(query.offset, 10) : undefined,
+      orderBy: query.orderBy as "created_at" | "updated_at" | "title" | undefined,
+      orderDirection: query.orderDirection as "ASC" | "DESC" | undefined,
+    });
+
+    return c.json(result, result.success ? 200 : 500);
+  });
+
+  app.get(OBSERVABILITY_MEMORY_ROUTES.getMemoryConversationMessages.path, async (c) => {
+    const conversationId = c.req.param("conversationId");
+    const query = c.req.query();
+    logger.debug(
+      `[serverless] GET /observability/memory/conversations/${conversationId}/messages`,
+      { query },
+    );
+
+    const before = query.before ? new Date(query.before) : undefined;
+    const after = query.after ? new Date(query.after) : undefined;
+
+    const result = await getConversationMessagesHandler(deps, conversationId, {
+      agentId: query.agentId,
+      limit: query.limit ? Number.parseInt(query.limit, 10) : undefined,
+      before: before && !Number.isNaN(before.getTime()) ? before : undefined,
+      after: after && !Number.isNaN(after.getTime()) ? after : undefined,
+      roles: query.roles ? query.roles.split(",") : undefined,
+    });
+
+    if (!result.success) {
+      return c.json(result, result.error === "Conversation not found" ? 404 : 500);
+    }
+
+    return c.json(result, 200);
+  });
+
+  app.get(OBSERVABILITY_MEMORY_ROUTES.getWorkingMemory.path, async (c) => {
+    const query = c.req.query();
+    logger.debug("[serverless] GET /observability/memory/working-memory", { query });
+
+    const scope =
+      query.scope === "user" ? "user" : query.scope === "conversation" ? "conversation" : undefined;
+
+    if (!scope) {
+      return c.json(
+        { success: false, error: "Invalid scope. Expected 'conversation' or 'user'." },
+        400,
+      );
+    }
+
+    const result = await getWorkingMemoryHandler(deps, {
+      agentId: query.agentId,
+      scope,
+      conversationId: query.conversationId,
+      userId: query.userId,
+    });
+
+    if (!result.success) {
+      return c.json(result, result.error === "Working memory not found" ? 404 : 500);
+    }
+
+    return c.json(result, 200);
   });
 }
 
